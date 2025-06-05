@@ -3,10 +3,16 @@ from matplotlib import pyplot as plt
 
 target_fpath = '/flare/hpe_dragon_collab/balin/archit_fine_tune/smile_regress.training.log'
 case_files = [
-    'training_avdata_regNtransDrop.log',
-    'training_avdata_regDrop.log',
-    'training_avdata_noDrop.log',
-    'training_avdata_regDrop_CR.log'
+    #'training_avdata_regNtransDrop.log',
+    #'training_avdata_regDrop.log',
+    #'training_avdata_noDrop.log',
+    'training_avdata_regDrop_CR.log',
+    #'training_wfdata_regDrop_CR_random.log',
+    'training_wfdata_regDrop_CR_stratified.log',
+    'training_wfdata_regDrop_CR_stratified_realFT_2-6.log',
+    'training_wfFulldata_regDrop_CR_stratified_realFT_2-6.log',
+    'training_wfFulldata_regDrop_CR_stratified.log',
+    'training_wfFulldata_regDrop_CR_stratified_realFT_3-6.log'
 ]
 labels = ['loss','mae','r2','val_loss','val_mae','val_r2']
 
@@ -51,7 +57,7 @@ with open(target_fpath,'r') as fh:
 
 # Plot Train R2
 fig, axs = plt.subplots(nrows=1, ncols=1, figsize=(7, 7))
-axs.plot(target['r2'],label = "target",ls="-",linewidth=2,color='black')
+axs.plot(target['r2'],label = "Archit's fine-tune",ls="-",linewidth=2,color='black')
 for case in cases.keys():
     axs.plot(cases[case]['r2'],label=case,ls="--",linewidth=2)
 #axs.set_yscale("log")
@@ -63,7 +69,7 @@ fig.savefig('plt_train_r2.png')
 
 # Plot Val R2
 fig, axs = plt.subplots(nrows=1, ncols=1, figsize=(7, 7))
-axs.plot(target['val_r2'],label = "target",ls="-",linewidth=2,color='black')
+axs.plot(target['val_r2'],label = "Archit's fine-tune",ls="-",linewidth=2,color='black')
 for case in cases.keys():
     axs.plot(cases[case]['val_r2'],label=case,ls="--",linewidth=2)
 #axs.set_yscale("log")

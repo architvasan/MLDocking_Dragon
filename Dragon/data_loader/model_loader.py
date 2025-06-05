@@ -35,7 +35,7 @@ def save_model_weights(dd: Union[DDict, dict], model, model_iter: int, verbose =
 
     print(f"Saved model {model_iter} to dictionary", flush=True)
 
-def retrieve_model_from_dict(dd: Union[DDict, dict]):
+def retrieve_model_from_dict(dd: Union[DDict, dict], fine_tune: bool = False):
 
     #weights_dict = dd["model"]
     #model_iter = dd["model_iter"]
@@ -47,7 +47,7 @@ def retrieve_model_from_dict(dd: Union[DDict, dict]):
 
 
     try:
-        model = ModelArchitecture(hyper_params).call()
+        model = ModelArchitecture(hyper_params, fine_tune=fine_tune).call()
     except Exception as e:
         print(f"Exception {e} raised in calling model")
 

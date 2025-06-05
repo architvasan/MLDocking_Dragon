@@ -102,9 +102,8 @@ if __name__ == "__main__":
     cand_dd.bput('simulated_compounds', [])
 
     # Load test simulation data
-    with open(f"{driver_path}/training/training_test.data", "r") as f:
+    with open(f"{driver_path}/training/training_test_full.data", "r") as f:
         lines = f.readlines()
-        
         simulated_compounds = []
         for line in lines:
             #print(line)

@@ -106,12 +106,28 @@ def initialize_hvd():
     gpus = tf.config.experimental.list_physical_devices('GPU')
     # Ping GPU to each9 rank
     for gpu in gpus:
-    	tf.config.experimental.set_memory_growth(gpu,True)
-    if gpus:
-    	tf.config.experimental.set_visible_devices(gpus[hvd.local_rank()], 'GPU')
+        tf.config.experimental.set_memory_growth(gpu,True)
+        if gpus:
+            tf.config.experimental.set_visible_devices(gpus[hvd.local_rank()], 'GPU')
 
     return 
 
+
+def stratified_sample(data, y, bin_left, bin_right, numbins, val_split=0.2):
+    from sklearn.model_selection import train_test_split
+    try:
+        bins = np.linspace(bin_left, bin_right, numbins)
+        y_binned = np.digitize(y, bins)
+
+        x_train, x_val, y_train, y_val = train_test_split(data, y, test_size=val_split, stratify=y_binned)
+
+    except:
+        bins = np.linspace(bin_left+2, bin_right-2, numbins-2)
+        y_binned = np.digitize(y, bins)
+                                                                                                       
+        x_train, x_val, y_train, y_val = train_test_split(data, y, test_size=val_split, stratify=y_binned)
+        
+    return x_train, y_train, x_val, y_val
 
 def split_data(data_x, data_y):
     data_x = np.array_split(data_x, hvd.size())[hvd.rank()]
@@ -271,19 +287,32 @@ def train_val_data_archit(path,fine_tuned=False,validation_fraction=0.15):
 
 
 
-def train_val_data(candidate_dict,fine_tuned=False,validation_fraction=0.15):
-  
+def train_val_data(candidate_dict,fine_tuned=False,validation_fraction=0.2,method="random"):
+    assert method in ["random","stratified"], "The sampling method must be random or stratified"
     smiles, scores = assemble_docking_data_top(candidate_dict)
-    data = list(zip(smiles,scores))
-    random.shuffle(data)
-    smiles,scores = zip(*data)
-    num_samples = len(smiles)
-    num_val = int(num_samples*validation_fraction)
-    num_train = num_samples - num_val
-    train_smiles = smiles[:num_train]
-    train_scores = scores[:num_train]
-    val_smiles = smiles[num_train:]
-    val_scores = scores[num_train:]
+    if method == "random":  
+        data = list(zip(smiles,scores))
+        random.shuffle(data)
+        smiles,scores = zip(*data)
+        num_samples = len(smiles)
+        num_val = int(num_samples*validation_fraction)
+        num_train = num_samples - num_val
+        train_smiles = smiles[:num_train]
+        train_scores = scores[:num_train]
+        val_smiles = smiles[num_train:]
+        val_scores = scores[num_train:]
+    elif method == "stratified":
+        bin_left = -14.
+        bin_right = -6.
+        num_bins = 5
+        train_smiles, train_scores, val_smiles, val_scores = \
+            stratified_sample(smiles, 
+                              scores, 
+                              bin_left, 
+                              bin_right, 
+                              num_bins,
+                              val_split=validation_fraction
+                              )
 
     train_scores = pd.DataFrame(train_scores)
     val_scores = pd.DataFrame(val_scores)
@@ -426,7 +455,7 @@ class TransformerBlock(layers.Layer):
 
 class ModelArchitecture(layers.Layer):
     #def __init__(self, vocab_size, maxlen, embed_dim, num_heads, ff_dim, DR_TB, DR_ff, activation, dropout1, lr, loss_fn, hvd_switch):
-    def __init__(self, hyper_params):
+    def __init__(self, hyper_params, fine_tune=False):
                 
         lr = hyper_params['general']['lr']
         vocab_size = hyper_params['tokenization']['vocab_size']
@@ -446,6 +475,7 @@ class ModelArchitecture(layers.Layer):
 
         self.num_tb = arch_params['transformer_block']['num_blocks']
         self.loss_fn = "mean_squared_error" #hyper_params['general']['loss_fn']
+        self.fine_tune = fine_tune
 
         self.inputs = layers.Input(shape=(maxlen,))
         self.embedding_layer = TokenAndPositionEmbedding(maxlen,
@@ -505,6 +535,13 @@ class ModelArchitecture(layers.Layer):
         
         model = keras.Model(inputs=self.inputs, outputs=outputs)
 
+        if self.fine_tune:
+            layers = ['dropout_2', 'dense_2', 'dropout_3', 'dense_3', 'dropout_4', 'dense_4', 'dropout_5', 'dense_5', 'dropout_6', 'dense_6']
+            layers = ['dropout_3', 'dense_3', 'dropout_4', 'dense_4', 'dropout_5', 'dense_5', 'dropout_6', 'dense_6']
+            for layer in model.layers:
+                if layer.name not in layers:
+                    layer.trainable = False
+        
         model.compile(
             loss=self.loss_fn, optimizer=self.opt, metrics=["mse", "mae", r2], #steps_per_execution=100
         )

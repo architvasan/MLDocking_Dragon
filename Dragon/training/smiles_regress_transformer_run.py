@@ -13,6 +13,7 @@ import random
 import tensorflow as tf
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.preprocessing import sequence, text
+import pandas as pd
 
 #from .ST_funcs.clr_callback import *
 from .ST_funcs.smiles_regress_transformer_funcs import train_val_data, assemble_callbacks, train_val_data_archit
@@ -65,21 +66,20 @@ def fine_tune(dd: DDict,
     fine_tune_log = "training.log"
 
     ######## Build model #############
-        
-    model, model_iter, hyper_params = retrieve_model_from_dict(dd)
+    model, model_iter, hyper_params = retrieve_model_from_dict(dd,fine_tune=True)
     model_iter += 1
-
-    for layer in model.layers:
-        if layer.name not in ['dropout_3', 'dense_3', 'dropout_4', 'dense_4', 'dropout_5', 'dense_5', 'dropout_6', 'dense_6']:
-            layer.trainable = False
+    with open(fine_tune_log, 'w') as f:
+        f.write(f"Read model weights from DDict\n")
 
     ######## Create training and validation data##### 
-    with open(fine_tune_log, 'w') as f:
+    with open(fine_tune_log, 'a') as f:
         f.write(f"Create training data\n")
-    x_train, y_train, x_val, y_val = train_val_data(candidate_dict)    
-    x_train, y_train, x_val, y_val = train_val_data_archit('/flare/hpe_dragon_collab/balin/archit_fine_tune')    
+    x_train, y_train, x_val, y_val = train_val_data(candidate_dict,method="stratified")    
+    #x_train, y_train, x_val, y_val = train_val_data_archit('/flare/hpe_dragon_collab/balin/archit_fine_tune')    
     with open(fine_tune_log, 'a') as f:
         f.write(f"Finished creating training data\n")
+        f.write(f'Max docking {y_train.max()},{y_val.max()}\n')
+        f.write(f'Min docking {y_train.min()},{y_val.min()}\n')
  
     ######## Create callbacks #######
     callbacks = assemble_callbacks(hyper_params)
