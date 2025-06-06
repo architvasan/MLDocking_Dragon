@@ -186,8 +186,9 @@ def assemble_docking_data_top(candidate_dict):
     # top_smiles = top_val["smiles"]
 
     # Here grab all simulated smiles instead of just top ones
-    top_smiles = candidate_dict.bget('simulated_compounds')
-
+    #top_smiles = candidate_dict.bget('simulated_compounds')
+    top_smiles = list(candidate_dict.keys())
+    
     train_smiles = []
     train_scores = []
     num_skipped = 0

@@ -17,6 +17,7 @@ from .ST_funcs.smiles_regress_transformer_funcs import train_val_data
 from data_loader.model_loader import retrieve_model_from_dict, save_model_weights
 import sys
 import os
+import time
 
 import dragon
 from dragon.data.ddict.ddict import DDict
@@ -25,59 +26,87 @@ from dragon.data.ddict.ddict import DDict
 #tf.enable_eager_execution()
 
 
-def fine_tune(dd: DDict, 
-                candidate_dict: DDict, 
+def continue_training(continue_event, training_iter):
+    if continue_event is None:
+        if training_iter == 0:
+            return True
+        else:
+            return False
+    else:
+        return continue_event.is_set()
+
+def fine_tune(model_list_dd: DDict, 
+                sim_dd: DDict,
+                continue_event,
+                new_model_event,
+                barrier, 
                 BATCH: int, 
                 EPOCH: int, 
-                save_model=True):
+                save_model=True,
+                list_poll_interval_sec=60):
 
     fine_tune_log = "training.log"
 
-    ######## Build model #############
-        
-    model, model_iter, hyper_params = retrieve_model_from_dict(dd)
-    model_iter += 1
+    prev_top_candidates = []
+    training_iter = 0
+    while continue_training(continue_event, training_iter):
 
-    for layer in model.layers:
-        if layer.name not in ['dropout_3', 'dense_3', 'dropout_4', 'dense_4', 'dropout_5', 'dense_5', 'dropout_6', 'dense_6']:
-            layer.trainable = False
+        if "current_sort_list" in model_list_dd.keys():
+            top_candidates = model_list_dd.bget("current_sort_list")
+        else:
+            top_candidates = []
 
-    with open(fine_tune_log, 'a') as f:
-        f.write(f"Create training data\n")
-    ########Create training and validation data##### 
-    x_train, y_train, x_val, y_val = train_val_data(candidate_dict)
-    with open(fine_tune_log, 'a') as f:
-        f.write(f"Finished creating training data\n")
-    
-    # Only train if there is new data
-    if len(x_train) > 0:
-        with open(fine_tune_log, 'a') as f:
-            f.write(f"{BATCH=} {EPOCH=} {len(x_train)=}\n")
-        
-        with open(fine_tune_log, 'a') as sys.stdout:
-            history = model.fit(
-                        x_train,
-                        y_train,
-                        batch_size=BATCH,
-                        epochs=EPOCH,
-                        verbose=2,
-                        validation_data=(x_val,y_val),
-                        #callbacks=callbacks,
-                    )
-            print("model fitting complete",flush=True)
-        sys.stdout = sys.__stdout__
-        print("model fitting complete",flush=True)
-        
-        
-        # Save to dictionary
-        if save_model:
-            model_path = "current_model.keras"
-            model.save(model_path)
-            with open("model_iter",'w') as f:
-                f.write(f"{model_iter=} {model_path=}")
+        if top_candidates == prev_top_candidates:
+            time.sleep(list_poll_interval_sec)
+        else:
+            ######## Build model #############
+                
+            model, model_iter, hyper_params = retrieve_model_from_dict(model_list_dd,)
+            model_iter += 1
 
-        save_model_weights(dd, model, model_iter)
-        print("Saved fine tuned model to dictionary",flush=True)
-    
+            for layer in model.layers:
+                if layer.name not in ['dropout_3', 'dense_3', 'dropout_4', 'dense_4', 'dropout_5', 'dense_5', 'dropout_6', 'dense_6']:
+                    layer.trainable = False
+
+            with open(fine_tune_log, 'a') as f:
+                f.write(f"Create training data\n")
+            ########Create training and validation data##### 
+            x_train, y_train, x_val, y_val = train_val_data(sim_dd)
+            with open(fine_tune_log, 'a') as f:
+                f.write(f"Finished creating training data\n")
+            
+            # Only train if there is new data
+            if len(x_train) > 0:
+                with open(fine_tune_log, 'a') as f:
+                    f.write(f"{BATCH=} {EPOCH=} {len(x_train)=}\n")
+                
+                with open(fine_tune_log, 'a') as sys.stdout:
+                    history = model.fit(
+                                x_train,
+                                y_train,
+                                batch_size=BATCH,
+                                epochs=EPOCH,
+                                verbose=2,
+                                validation_data=(x_val,y_val),
+                                #callbacks=callbacks,
+                            )
+                    print("model fitting complete",flush=True)
+                sys.stdout = sys.__stdout__
+                print("model fitting complete",flush=True)
+                
+                
+                # Save to dictionary
+                if save_model:
+                    model_path = "current_model.keras"
+                    model.save(model_path)
+                    with open("model_iter",'w') as f:
+                        f.write(f"{model_iter=} {model_path=}")
+
+                save_model_weights(model_list_dd, model, model_iter)
+                print("Saved fine tuned model to dictionary",flush=True)
+                new_model_event.set()
+                barrier.wait()
+                new_model_event.clear()
+            
 
 

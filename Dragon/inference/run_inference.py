@@ -95,13 +95,50 @@ def process_inference_data(hyper_params: dict, tokenizer, smiles_raw: List[str])
     return x_inference
 
 
-def check_model_iter(continue_event):
-    return True
+def load_model(new_model_event, i):
+    """Check if the model has been updated and load it if so
+    :param new_model_event: event to check if the model has been updated
+    :type new_model_event: threading.Event
+    :param i: current key index
+    :type i: int
+    :return: True if the model should be loaded, False otherwise
+    :rtype: bool
+    """
+    # Load model on first key of first analysis iteration always
+    if i == 0:
+        return True
+    # If new_model_event is not None, it means we are running the async workflow
+    if new_model_event is not None:
+        return new_model_event.is_set()  
 
+def continue_inference(continue_event, reanalysis_iter):
+    """Check if inference should continue
+    :param continue_event: event to check if inference should continue
+    :type continue_event: threading.Event
+    :param reanalysis_iter: current reanalysis iteration
+    :type reanalysis_iter: int
+    :return: True if inference should continue, False otherwise
+    :rtype: bool
+    """
+    # If continue_event is None, it means we are running the sequenal workflow
+    if continue_event is None:
+        if reanalysis_iter == 0:
+            return True 
+        else:
+            return False
+    # If continue_event is not None, it means we are running the async workflow
+    else:
+        return continue_event.is_set()
 
 def infer(data_dd, 
           model_list_dd, 
-          num_procs, proc, continue_event, limit=None, debug=True):
+          num_procs, proc, 
+          continue_event,
+          checkpoint_id,
+          limit=None, 
+          debug=True,
+          new_model_event=None,
+          bar=None):
     """Run inference reading from and writing data to the Dragon Dictionary"""
     gc.collect()
     # !!! DEBUG !!!
@@ -139,21 +176,6 @@ def infer(data_dd,
             dm = data_dd.manager(i)
             keys.extend(dm.keys())
     print(f"{proc}: found {len(keys)} local keys")
-    
-    # Load model from dictionary
-    if debug:
-        with open(log_file_name, "a") as f:
-            f.write(f"{model_list_dd.current_checkpoint_id=}\n")
-    model_list_dd.sync_to_newest_checkpoint()
-    if debug:
-        with open(log_file_name, "a") as f:
-            f.write(f"{model_list_dd.current_checkpoint_id=}\n")
-    model,hyper_params = retrieve_model_from_dict(model_list_dd)
-    model_iter = model_list_dd.current_checkpoint_id
-    
-    if debug:
-        with open(log_file_name, "a") as f:
-            f.write(f"Loaded model from checkpoint {model_iter}\n")
 
     # Split keys in Dragon Dict    
     keys = [k for k in keys if "iter" not in k and "model" not in k]
@@ -167,6 +189,7 @@ def infer(data_dd,
     if debug:
         with open(log_file_name, "a") as f:
             f.write(f"Running inference on {len(split_keys)} keys\n")
+     
     
     # Set up tokenizer
     # if hyper_params['tokenization']['tokenizer']['category'] == 'smilespair':
@@ -181,83 +204,112 @@ def infer(data_dd,
     if limit is not None:
         num_run = min(limit, num_run)
     # Iterate over keys in Dragon Dict
-    BATCH = hyper_params["general"]["batch_size"]
+    
     cutoff = 9
     print(f"worker {proc} processing {num_run} keys",flush=True)
+    continue_event = None
+    reanalysis_iter = 0
+    
+    while continue_inference(continue_event, reanalysis_iter):
+        for ikey in range(num_run):
+            if load_model(new_model_event, ikey+reanalysis_iter):
+                # Load model from dictionary
+                if debug:
+                    with open(log_file_name, "a") as f:
+                        f.write(f"{model_list_dd.current_checkpoint_id=}\n")
+                # model_list_dd.sync_to_newest_checkpoint()
 
-    for ikey in range(num_run):
-        # Print progress to stdout every 8 iters
-        if ikey%8 == 0:
-           print(f"...worker {proc} has completed {ikey} keys out of {num_run} with model {model_iter}", flush=True)
-        if check_model_iter(continue_event):  # this check is to stop inference in async wf when model is retrained
-            ktic = perf_counter()
-            key = split_keys[ikey]
-            dict_tic = perf_counter()
-            
-            # print(f"worker {proc}: getting val from dd",flush=True)
-            val = data_dd[key]
-            # print(f"worker {proc}: finished getting val from dd",flush=True)
-            
-            dict_toc = perf_counter()
-            key_dictionary_time = dict_toc - dict_tic
+                model_list_dd._chkpt_id = checkpoint_id
 
-            key_data_moved_size = 0.
-            for kkey in val.keys():
-                key_data_moved_size += sys.getsizeof(kkey)
-                if type(val[kkey]) == list:
-                    key_data_moved_size += sum([sys.getsizeof(v) for v in val[kkey]]) 
+                if debug:
+                    with open(log_file_name, "a") as f:
+                        f.write(f"{model_list_dd.current_checkpoint_id=}\n")
+
+                # Retrieve model from dictionary
+                model,hyper_params = retrieve_model_from_dict(model_list_dd)
+                model_iter = model_list_dd.current_checkpoint_id
+                BATCH = hyper_params["general"]["batch_size"]
+                
+                if debug:
+                    with open(log_file_name, "a") as f:
+                        f.write(f"Loaded model from checkpoint {model_iter}\n")
+                if bar is not None and reanalysis_iter+ikey > 0:
+                    print(f"worker {proc} waiting for barrier sync", flush=True)
+                    bar.wait()
                 else:
-                    key_data_moved_size += sys.getsizeof(val[kkey])          
+                    print(f"worker {proc} proceeding to inference", flush=True)
+            # Print progress to stdout every 8 iters
+            if ikey%8 == 0:
+                print(f"...worker {proc} has completed {ikey} keys out of {num_run} with model {model_iter}", flush=True)
+            if continue_inference(continue_event, reanalysis_iter):  # this check is to stop inference in async wf when model is retrained
+                ktic = perf_counter()
+                key = split_keys[ikey]
+                dict_tic = perf_counter()
+                
+                # print(f"worker {proc}: getting val from dd",flush=True)
+                val = data_dd[key]
+                # print(f"worker {proc}: finished getting val from dd",flush=True)
+                
+                dict_toc = perf_counter()
+                key_dictionary_time = dict_toc - dict_tic
 
-            smiles_raw = val["smiles"]
-            x_inference = process_inference_data(hyper_params, tokenizer, smiles_raw)
-            output = model.predict(x_inference, batch_size=BATCH, verbose=0).flatten()
+                key_data_moved_size = 0.
+                for kkey in val.keys():
+                    key_data_moved_size += sys.getsizeof(kkey)
+                    if type(val[kkey]) == list:
+                        key_data_moved_size += sum([sys.getsizeof(v) for v in val[kkey]]) 
+                    else:
+                        key_data_moved_size += sys.getsizeof(val[kkey])          
 
-            sort_index = np.flip(np.argsort(output)).tolist()
-            smiles_sorted = [smiles_raw[i] for i in sort_index]
-            pred_sorted = [
-                (
-                    output[i].item()
-                    if output[i] > cutoff
-                    else 0.0
-                )
-                for i in sort_index
-            ]
-            val["smiles"] = smiles_sorted
-            val["inf"] = pred_sorted
-            val["model_iter"] = model_iter
+                smiles_raw = val["smiles"]
+                x_inference = process_inference_data(hyper_params, tokenizer, smiles_raw)
+                output = model.predict(x_inference, batch_size=BATCH, verbose=0).flatten()
 
-            dict_tic = perf_counter()
-            data_dd[key] = val
-            dict_toc = perf_counter()
-            key_dictionary_time += dict_toc - dict_tic
-
-            for kkey in val.keys():
-                key_data_moved_size += sys.getsizeof(kkey)
-                if type(val[kkey]) == list:
-                    key_data_moved_size += sum([sys.getsizeof(v) for v in val[kkey]]) 
-                else:
-                    key_data_moved_size += sys.getsizeof(val[kkey]) 
-                    
-            num_smiles += len(smiles_sorted)
-
-            ktoc = perf_counter()
-            key_time = ktoc - ktic
-            dictionary_time += key_dictionary_time
-            data_moved_size += key_data_moved_size
-
-            if debug:
-                with open(log_file_name, "a") as f:
-                    f.write(
-                        f"Performed inference on key {key} {key_time=} {len(smiles_sorted)=} {key_data_moved_size=} {key_dictionary_time=}\n"
+                sort_index = np.flip(np.argsort(output)).tolist()
+                smiles_sorted = [smiles_raw[i] for i in sort_index]
+                pred_sorted = [
+                    (
+                        output[i].item()
+                        if output[i] > cutoff
+                        else 0.0
                     )
-                #print(
-                #    f"Performed inference on key {key} {key_time=} {len(smiles_sorted)=} {key_data_moved_size=} {key_dictionary_time=}",
-                    #   flush=True,
-                #)
-        else:
-            break
+                    for i in sort_index
+                ]
+                val["smiles"] = smiles_sorted
+                val["inf"] = pred_sorted
+                val["model_iter"] = model_iter
 
+                dict_tic = perf_counter()
+                data_dd[key] = val
+                dict_toc = perf_counter()
+                key_dictionary_time += dict_toc - dict_tic
+
+                for kkey in val.keys():
+                    key_data_moved_size += sys.getsizeof(kkey)
+                    if type(val[kkey]) == list:
+                        key_data_moved_size += sum([sys.getsizeof(v) for v in val[kkey]]) 
+                    else:
+                        key_data_moved_size += sys.getsizeof(val[kkey]) 
+                        
+                num_smiles += len(smiles_sorted)
+
+                ktoc = perf_counter()
+                key_time = ktoc - ktic
+                dictionary_time += key_dictionary_time
+                data_moved_size += key_data_moved_size
+
+                if debug:
+                    with open(log_file_name, "a") as f:
+                        f.write(
+                            f"Performed inference on key {key} {key_time=} {len(smiles_sorted)=} {key_data_moved_size=} {key_dictionary_time=}\n"
+                        )
+                    #print(
+                    #    f"Performed inference on key {key} {key_time=} {len(smiles_sorted)=} {key_data_moved_size=} {key_dictionary_time=}",
+                        #   flush=True,
+                    #)
+            else:
+                break
+        reanalysis_iter += 1
     toc = perf_counter()
 
     metrics = {

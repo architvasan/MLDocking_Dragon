@@ -128,71 +128,80 @@ def save_top_candidates_list(candidate_dict):
 
 def sort_controller(
     dd,
-    num_return_sorted: str,
+    top_candidate_number: int,
     max_procs: int,
     nodelist: list,
-    candidate_dict,
+    model_list_dd,
     continue_event,
-    checkpoint_interval_min=10,
+    checkpoint_interval_min=2,
 ):
 
     iter = 0
     with open("sort_controller.log", "a") as f:
         f.write(f"{datetime.datetime.now()}: Starting Sort Controller\n")
         f.write(
-            f"{datetime.datetime.now()}: Sorting for {num_return_sorted} candidates\n"
+            f"{datetime.datetime.now()}: Sorting for {top_candidate_number} candidates\n"
         )
 
-    ckeys = candidate_dict.keys()
+    ckeys = model_list_dd.keys()
     if "max_sort_iter" not in ckeys:
-        candidate_dict["max_sort_iter"] = "-1"
+        model_list_dd["max_sort_iter"] = "-1"
 
     check_time = perf_counter()
 
     continue_flag = True
 
     while continue_flag:
-        gc.collect()
+
+        # Wait for sort interval
+        time.sleep(checkpoint_interval_min * 60)
 
         with open("sort_controller.log", "a") as f:
             f.write(f"{datetime.datetime.now()}: Starting iter {iter}\n")
         tic = perf_counter()
         print(f"Sort iter {iter}", flush=True)
-        # sort_dictionary_queue(_dict, num_return_sorted, max_procs, key_list, candidate_dict)
-        # sort_dictionary_pool(_dict, num_return_sorted, max_procs, key_list, candidate_dict)
-        sort_dictionary_pg(dd, num_return_sorted, max_procs, nodelist, candidate_dict)
-        print(f"Finished pg sort", flush=True)
-        # dd["sort_iter"] = iter
-        # max_ckey = candidate_dict["max_sort_iter"]
-        # inf_results = candidate_dict[max_ckey]["inf"]
-        # cutoff_check = [p for p in inf_results if p < 9 and p > 0]
-        # print(f"Cutoff check: {len(cutoff_check)} inf vals below cutoff")
-        compare_candidate_results(
-            candidate_dict, continue_event, num_return_sorted, max_iter=50
-        )
 
-        if (check_time - perf_counter()) / 60.0 > checkpoint_interval_min:
-            save_top_candidates_list(candidate_dict)
-            check_time = perf_counter()
-        toc = perf_counter()
-        with open("sort_controller.log", "a") as f:
-            f.write(f"{datetime.datetime.now()}: iter {iter}: sort time {toc-tic} s\n")
-        iter += 1
 
-        if continue_event is None:
-            continue_flag = False
+        random_number = int(0.1*top_candidate_number)
+        print(f"Adding {random_number} random candidates to training", flush=True)
+        if os.getenv("USE_MPI_SORT"):
+            print("Using MPI sort",flush=True)
+            max_sorter_procs = max_procs*len(nodelist)
+            sorter_proc = mp.Process(target=sort_dictionary_pg, 
+                                    args=(dd,
+                                        top_candidate_number,
+                                        max_sorter_procs, 
+                                        nodelist,
+                                        model_list_dd,
+                                        random_number,
+                                        ),
+                                    )
+            sorter_proc.start()
+            sorter_proc.join()
         else:
+            print("Using filter sort", flush=True)
+    #TODO: pass in checkpoint id to sorting
+            sorter_proc = mp.Process(target=sort_dictionary,
+                                    args=(
+                                            dd,
+                                            top_candidate_number,
+                                            model_list_dd,
+                                            ),
+                                    )
+            sorter_proc.start()
+            sorter_proc.join()
+        # if sorter_proc.exitcode != 0:
+        #     raise Exception("Sorting failed\n")
+
+        if continue_event is not None:
+            if iter > 10: continue_event.clear()
             continue_flag = continue_event.is_set()
-    if continue_event is not None:
-        ckeys = candidate_dict.keys()
-        print(f"final {ckeys=}")
-        save_top_candidates_list(candidate_dict)
-    # ckeys = filter_candidate_keys(ckeys)
-    # if len(ckeys) > 0:
-    #     ckey_max = max(ckeys)
-    #     print(f"top candidates = {candidate_dict[ckey_max]}")
+        else:
+            continue_flag = False
+    
 
 
+#TODO: pass in checkpoint_id
 def get_largest(dd, out_queue, num_return_sorted):
     # get num_return_sorted values from the manager
     # reflected in dd (i.e. dd is a manager directed

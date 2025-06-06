@@ -37,8 +37,16 @@ def load_pretrained_model(dd: DDict):
             f.write(f"{e}")
 
 
-def launch_inference(data_dd: DDict, model_list_dd: DDict, nodelist, num_procs: int, inf_num_limit):
-    """Launch the inference ruotine
+def launch_inference(data_dd: DDict, 
+                    model_list_dd: DDict, 
+                    nodelist, 
+                    num_procs: int, 
+                    inf_num_limit: int,
+                    continue_event = None,
+                    new_model_event = None,
+                    barrier=None,
+                    debug=True):
+    """Launch the inference routine
 
     :param dd: Dragon distributed dictionary
     :type dd: DDict
@@ -80,6 +88,11 @@ def launch_inference(data_dd: DDict, model_list_dd: DDict, nodelist, num_procs: 
     if len(inf_cpu_bind) != len(inf_gpu_bind):
         raise (Exception("Number of cpu bindings does not match the number of gpus"))
 
+    # Get checkpoint id
+    checkpoint_id = model_list_dd.current_checkpoint_id
+
+    #bar = mp.Barrier(parties=num_inf_nodes * num_procs_pn)
+
     # Create the process group
     global_policy = Policy(distribution=Policy.Distribution.BLOCK)
     grp = ProcessGroup(policy=global_policy)
@@ -87,6 +100,10 @@ def launch_inference(data_dd: DDict, model_list_dd: DDict, nodelist, num_procs: 
         node_name = Node(nodelist[node_num]).hostname
         for proc in range(num_procs_pn):
             proc_id = node_num * num_procs_pn + proc
+
+            if continue_event is not None and proc_id == 0:
+                # In the asynchronous workflow, the first gpu is reserved for the fine-tuning process
+                continue
 
             local_policy = Policy(placement=Policy.Placement.HOST_NAME,
                                   host_name=node_name, 
@@ -98,8 +115,12 @@ def launch_inference(data_dd: DDict, model_list_dd: DDict, nodelist, num_procs: 
                                                         model_list_dd,
                                                         num_procs_pn,
                                                         proc_id, 
-                                                        None, # Continue event not used in sequential wf
+                                                        continue_event, # Continue event not used in sequential wf
+                                                        checkpoint_id,
                                                         inf_num_limit,
+                                                        debug,
+                                                        new_model_event,
+                                                        barrier,
                                                         ), 
                                                      cwd=run_dir,
                                                      policy=local_policy,))

@@ -314,10 +314,25 @@ def filter_candidates(cdd, candidates: list, current_iter):
             f.write(f"{e}\n")
         raise(e)
 
+def continue_simulations(continue_event, sim_iter):
+    """Check if the continue event is set to continue simulations."""
+    if continue_event is None:
+        if sim_iter == 0:
+            return True
+        else:
+            return False
+    else:
+        return continue_event.is_set()  
 
-def run_docking(cdd, docking_iter, proc: int, num_procs: int):
+def run_docking(sim_dd, 
+                model_list_dd, 
+                continue_event, 
+                proc: int, 
+                num_procs: int, 
+                barrier=None, 
+                list_poll_interval_sec=60):
     #print(f"Dock worker {proc} starting...", flush=True)
-    debug = False
+    debug = True
     if debug:
         myp = current_process()
         p = psutil.Process()
@@ -325,124 +340,135 @@ def run_docking(cdd, docking_iter, proc: int, num_procs: int):
         log_file_name = f"dock_worker_{proc}.log"
         hostname = socket.gethostname()
         with open(log_file_name,"a") as f:
-            f.write(f"Launching infer for worker {proc} from process {myp.ident} on core {core_list} on device {hostname}\n")
+            f.write(f"Launching for worker {proc} from process {myp.ident} on core {core_list} on device {hostname}\n")
     
     # Get keys
-    ckeys = cdd.keys()
+    ckeys = model_list_dd.keys()
 
-    
     if debug:
         with open(log_file_name,"a") as f:
             f.write(f"{datetime.datetime.now()}: Docking worker on iter {docking_iter} with candidate list {ckey_max}\n")
 
-    # most recent sorted list
-    top_candidates = cdd.bget("current_sort_list")
-    top_candidates_list = list(zip(top_candidates['smiles'], top_candidates['inf'], top_candidates['model_iter']))
-    if proc == 1: print(f"Sorted list has {len(top_candidates_list)} candidates", flush=True)
-    
-    # add random samples to sorted candidates if available
-    if "random_compound_sample" in ckeys:
-        random_candidates = cdd['random_compound_sample']
-        random_candidates_list = list(zip(random_candidates['smiles'],random_candidates['inf'],random_candidates['model_iter']))
-        if proc == 1: print(f"Random candidate list has {len(random_candidates_list)} candidates", flush=True)
-        top_candidates_list += random_candidates_list
-                             
-    top_candidates_dict = {}
-    for i in range(len(top_candidates_list)):
-        cand = top_candidates_list[i]
-        top_candidates_dict[cand[0]] = (cand[1],cand[2])
+    prev_top_candidates = []
+    sim_iter = 0
 
-    top_candidates_smiles = list(top_candidates_dict.keys())
-    # # previous sorted list
-    # ckey_prev = str(int(ckey_max) - 1)
-    # prev_top_candidates = []
-    # if int(ckey_prev) >= 0:
-    #     prev_top_candidates = cdd[ckey_prev]["smiles"]
-
-    # All previously simulated compounds
-    #simulated_compounds = cdd["simulated_compounds"]
-    simulated_compounds = cdd.bget("simulated_compounds")
-
-    # Remove top candidates that have already been simulated
-    if proc == 1:
-        print(f"Found {len(top_candidates_smiles)} top candidates; there are {len(ckeys)} ckeys", flush=True)
-
-    # Remove only candidates in previous list and not ckeys because other workers may have already updated cdd
-    top_candidates_smiles = list(set(top_candidates_smiles) - set(simulated_compounds))
-    top_candidates_smiles.sort()
-    num_candidates = len(top_candidates_smiles)
-
-    if proc == 1:
-        print(f"Found {num_candidates} candidates not in previous list", flush=True)
-        
-
-    # Partition top candidate list to get candidates for this process to simulate
-    if num_procs < num_candidates:
-        my_candidates = split_dict_keys(top_candidates_smiles, num_procs, proc)
-    else:
-        if proc < len(top_candidates_smiles):
-            my_candidates = [top_candidates_smiles[proc]]
+    while continue_simulations(continue_event, sim_iter):
+        if "current_sort_list" in model_list_dd.keys():
+            top_candidates = model_list_dd.bget("current_sort_list")
         else:
-            my_candidates = []
-
-    if debug:
-        with open(log_file_name,"a") as f:
-            f.write(f"{datetime.datetime.now()}: Docking worker assigned {len(my_candidates)} candidates\n")
+            top_candidates = []
+        if top_candidates == prev_top_candidates:
+            # TODO: simulate random candidates instead of sleeping
+            time.sleep(list_poll_interval_sec)
+        else:
+            top_candidates_list = list(zip(top_candidates['smiles'], top_candidates['inf'], top_candidates['model_iter']))
+            if proc == 1: 
+                print(f"Sorted list has {len(top_candidates_list)} candidates", flush=True)
             
-    ## Remove any candidates in ckeys, this may lead to load imbalance, we should replace with queue
-    #my_candidates = list(set(my_candidates) - set(ckeys))
+            # add random samples to sorted candidates if available
+            if "random_compound_sample" in ckeys:
+                random_candidates = model_list_dd['random_compound_sample']
+                random_candidates_list = list(zip(random_candidates['smiles'],random_candidates['inf'],random_candidates['model_iter']))
+                if proc == 1: print(f"Random candidate list has {len(random_candidates_list)} candidates", flush=True)
+                top_candidates_list += random_candidates_list
+                                    
+            top_candidates_dict = {}
+            for i in range(len(top_candidates_list)):
+                cand = top_candidates_list[i]
+                top_candidates_dict[cand[0]] = (cand[1],cand[2])
 
-    if debug:
-        with open(log_file_name,"a") as f:
-            f.write(f"{datetime.datetime.now()}: Docking worker found {len(my_candidates)} candidates to simulate\n")
+            top_candidates_smiles = list(top_candidates_dict.keys())
+            
 
-    # if there are new candidates to simulate, run sims
-    if len(my_candidates) > 0:
-        tic = perf_counter()
-        if not os.getenv("DOCKING_SIM_DUMMY"):
-            sim_metrics = dock(cdd, my_candidates, top_candidates_dict, proc, debug=debug) 
-        else:
-            sim_metrics = dummy_dock(cdd, my_candidates, top_candidates_dict, proc, debug=debug) 
+            # All previously simulated compounds
+            #simulated_compounds = cdd["simulated_compounds"]
+            simulated_compounds = model_list_dd.bget("simulated_compounds")
 
-        toc = perf_counter()
-        if debug:
-            with open(f"dock_worker_{proc}.log","a") as f:
-                f.write(f"{datetime.datetime.now()}: iter {docking_iter}: proc {proc}: docking_sim_time {toc-tic} s \n")
-    else:
-        if debug:
-            with open(f"dock_worker_{proc}.log","a") as f:
-                f.write(f"{datetime.datetime.now()}: iter {docking_iter}: no sims run \n")
+            # Remove top candidates that have already been simulated
+            if proc == 1:
+                print(f"Found {len(top_candidates_smiles)} top candidates; there are {len(ckeys)} ckeys", flush=True)
 
-    # Get previously simulated candidates and update inference results
-    prev_simulated_candidates = simulated_compounds #list(set(simulated_compounds) - set(top_candidates_smiles))
+            # Remove only candidates in previous list and not ckeys because other workers may have already updated cdd
+            top_candidates_smiles = list(set(top_candidates_smiles) - set(simulated_compounds))
+            top_candidates_smiles.sort()
+            num_candidates = len(top_candidates_smiles)
 
-    # Get local keys
-    current_host = host_id()
-    manager_nodes = cdd.manager_nodes
-    procs_per_node = num_procs//len(manager_nodes)
-    if proc%procs_per_node == 0:
-        ckeys = []
-        for i in range(len(manager_nodes)):
-            if manager_nodes[i].h_uid == current_host:
-                #print(f"{proc}: getting keys from local manager {local_manager}")
-                dm = cdd.manager(i)
-                ckeys.extend(dm.keys())
+            if proc == 1:
+                print(f"Found {num_candidates} candidates not in previous list", flush=True)
+                
 
-        # Update local compounds inference results
-        local_prev_simulated_candidates = [cand for cand in prev_simulated_candidates if cand in ckeys and cand in top_candidates_dict.keys()]
-        print(f"Found {len(local_prev_simulated_candidates)} previously simulated candidates on local node to update with proc {proc}")
-        for cand in local_prev_simulated_candidates:
-            val = cdd[cand]
-            inf_results = val['inf_scores']
-            recorded_models = [r[1] for r in inf_results]
-            current_model = top_candidates_dict[cand][1]
-            if current_model not in recorded_models:
-                inf_results.append(top_candidates_dict[cand])
-                # print(f"{cand}: {inf_results}")
-                val['inf_scores'] = inf_results
-                cdd[cand] = val
+            # Partition top candidate list to get candidates for this process to simulate
+            if num_procs < num_candidates:
+                my_candidates = split_dict_keys(top_candidates_smiles, num_procs, proc)
+            else:
+                if proc < len(top_candidates_smiles):
+                    my_candidates = [top_candidates_smiles[proc]]
+                else:
+                    my_candidates = []
 
+            if debug:
+                with open(log_file_name,"a") as f:
+                    f.write(f"{datetime.datetime.now()}: Docking worker assigned {len(my_candidates)} candidates\n")
+                    
+            ## Remove any candidates in ckeys, this may lead to load imbalance, we should replace with queue
+            #my_candidates = list(set(my_candidates) - set(ckeys))
 
+            if debug:
+                with open(log_file_name,"a") as f:
+                    f.write(f"{datetime.datetime.now()}: Docking worker found {len(my_candidates)} candidates to simulate\n")
+
+            # if there are new candidates to simulate, run sims
+            if len(my_candidates) > 0:
+                tic = perf_counter()
+                if not os.getenv("DOCKING_SIM_DUMMY"):
+                    sim_metrics = dock(sim_dd, my_candidates, top_candidates_dict, proc, debug=debug) 
+                else:
+                    sim_metrics = dummy_dock(sim_dd, my_candidates, top_candidates_dict, proc, debug=debug) 
+
+                toc = perf_counter()
+                if debug:
+                    with open(f"dock_worker_{proc}.log","a") as f:
+                        f.write(f"{datetime.datetime.now()}: iter {docking_iter}: proc {proc}: docking_sim_time {toc-tic} s \n")
+            else:
+                if debug:
+                    with open(f"dock_worker_{proc}.log","a") as f:
+                        f.write(f"{datetime.datetime.now()}: iter {docking_iter}: no sims run \n")
+
+            # Get previously simulated candidates and update inference results
+            prev_simulated_candidates = simulated_compounds #list(set(simulated_compounds) - set(top_candidates_smiles))
+
+            # Get local keys
+            current_host = host_id()
+            manager_nodes = sim_dd.manager_nodes
+            procs_per_node = num_procs//len(manager_nodes)
+            if proc%procs_per_node == 0:
+                ckeys = []
+                for i in range(len(manager_nodes)):
+                    if manager_nodes[i].h_uid == current_host:
+                        #print(f"{proc}: getting keys from local manager {local_manager}")
+                        dm = sim_dd.manager(i)
+                        ckeys.extend(dm.keys())
+
+                # Update local compounds inference results
+                local_prev_simulated_candidates = [cand for cand in prev_simulated_candidates if cand in ckeys and cand in top_candidates_dict.keys()]
+                print(f"Found {len(local_prev_simulated_candidates)} previously simulated candidates on local node to update with proc {proc}")
+                for cand in local_prev_simulated_candidates:
+                    val = sim_dd[cand]
+                    inf_results = val['inf_scores']
+                    recorded_models = [r[1] for r in inf_results]
+                    current_model = top_candidates_dict[cand][1]
+                    if current_model not in recorded_models:
+                        inf_results.append(top_candidates_dict[cand])
+                        # print(f"{cand}: {inf_results}")
+                        val['inf_scores'] = inf_results
+                        sim_dd[cand] = val
+
+            if barrier is not None:
+                barrier.wait() # wait for all processes to finish before updating the simulated compounds
+                if proc == 1:
+                    model_list_dd.bput("simulated_compounds", list(sim_dd.keys()))
+        prev_top_candidates = top_candidates.copy()
+        sim_iter += 1
     #with open(f"finished_run_docking.log", "a") as f:
     #    f.write(f"{datetime.datetime.now()}: iter {docking_iter}: proc {proc}: Finished docking sims \n")
     return
