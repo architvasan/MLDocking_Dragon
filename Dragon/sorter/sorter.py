@@ -132,7 +132,8 @@ def sort_controller(
     max_procs: int,
     nodelist: list,
     model_list_dd,
-    continue_event,
+    random_number_fraction,
+    continue_event=None,
     checkpoint_interval_min=2,
 ):
 
@@ -144,25 +145,23 @@ def sort_controller(
         )
 
     ckeys = model_list_dd.keys()
-    if "max_sort_iter" not in ckeys:
-        model_list_dd["max_sort_iter"] = "-1"
-
-    check_time = perf_counter()
+    if "current_sort_iter" not in ckeys:
+        model_list_dd.bput("current_sort_iter", -1)
 
     continue_flag = True
 
     while continue_flag:
 
         # Wait for sort interval
-        time.sleep(checkpoint_interval_min * 60)
+        if continue_event is not None:
+            time.sleep(checkpoint_interval_min * 60)
 
         with open("sort_controller.log", "a") as f:
             f.write(f"{datetime.datetime.now()}: Starting iter {iter}\n")
         tic = perf_counter()
         print(f"Sort iter {iter}", flush=True)
 
-
-        random_number = int(0.1*top_candidate_number)
+        random_number = int(random_number_fraction*top_candidate_number)
         print(f"Adding {random_number} random candidates to training", flush=True)
         if os.getenv("USE_MPI_SORT"):
             print("Using MPI sort",flush=True)
@@ -270,6 +269,7 @@ def sort_dictionary(dd: DDict, num_return_sorted, cdd: DDict):
     cdd.bput("current_sort_iter", new_sort_iter)
     cdd.bput("current_sort_list", sort_val)
 
+    print(f"Finished filter sort")
     #cdd[ckey] = sort_val
     #cdd["sort_iter"] = int(ckey)
     #cdd["max_sort_iter"] = ckey

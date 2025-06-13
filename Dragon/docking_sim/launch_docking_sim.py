@@ -12,7 +12,7 @@ from dragon.native.machine import Node
 from .docking_openeye import run_docking
 
 
-def launch_docking_sim(sim_dd, model_list_dd, num_procs, nodelist, continue_event):
+def launch_docking_sim(sim_dd, model_list_dd, num_procs, nodelist, continue_event=None):
     """Launch docking simulations
 
     :param cdd: Dragon distributed dictionary for top candidates
@@ -37,6 +37,19 @@ def launch_docking_sim(sim_dd, model_list_dd, num_procs, nodelist, continue_even
     # cpu_affinity_string is of the form: "list:0-2,8-10:3-5,11-13"
     cpu_ranges = cpu_affinity_string.split(":")
     inf_cpu_bind = []
+    barrier = None
+
+    proc_count = 0
+    for node_num in range(num_nodes):
+        for proc in range(num_procs_pn):
+            # Skip skip threads and threads bound to inference gpus
+            if proc in skip_threads or proc in inf_cpu_bind:
+                print(f"Skipping thread {proc} for docking",flush=True)
+                continue
+            else:
+                proc_count += 1
+
+
     if continue_event is not None:
         for cr in cpu_ranges[1:]:
             bind_threads = []
@@ -51,19 +64,9 @@ def launch_docking_sim(sim_dd, model_list_dd, num_procs, nodelist, continue_even
                     for st in range(start_t, end_t + 1):
                         bind_threads.append(st)
             inf_cpu_bind += bind_threads
-
-    barrier = None
-    if continue_event is not None:
-        proc_count = 0
-        for node_num in range(num_nodes):
-            for proc in range(num_procs_pn):
-                # Skip skip threads and threads bound to inference gpus
-                if proc in skip_threads or proc in inf_cpu_bind:
-                    print(f"Skipping thread {proc} for docking",flush=True)
-                    continue
-                else:
-                    proc_count += 1
         barrier = mp.Barrier(parties=proc_count,)
+    
+        
     print(f"Docking Sims using {proc_count} processes", flush=True)
     
 
@@ -76,6 +79,7 @@ def launch_docking_sim(sim_dd, model_list_dd, num_procs, nodelist, continue_even
             if proc in skip_threads or proc in inf_cpu_bind:
                 continue
             proc_id = node_num*num_procs_pn+proc
+            print(f"{proc_id} on {node_name} using proc {proc}", flush=True)
             local_policy = Policy(placement=Policy.Placement.HOST_NAME,
                                   host_name=node_name,
                                   cpu_affinity=[proc])
@@ -83,10 +87,10 @@ def launch_docking_sim(sim_dd, model_list_dd, num_procs, nodelist, continue_even
                             template=ProcessTemplate(target=run_docking,
                                                         args=(sim_dd,
                                                             model_list_dd,
-                                                            continue_event,
                                                             proc_id,
                                                             num_procs,
-                                                            barrier,), 
+                                                            barrier,
+                                                            continue_event,), 
                                                         cwd=run_dir,
                                                         policy=local_policy,
                                                         )

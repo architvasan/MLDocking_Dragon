@@ -17,6 +17,10 @@ from dragon.infrastructure.policy import Policy
 
 from data_loader.data_loader_presorted import load_inference_data
 from inference.launch_inference import launch_inference
+from sorter.sorter import sort_controller
+from docking_sim.launch_docking_sim import launch_docking_sim
+from training.launch_training import launch_training
+
 #from sorter.sorter import sort_dictionary_pg, sort_dictionary
 #from docking_sim.launch_docking_sim import launch_docking_sim
 #from training.launch_training import launch_training
@@ -225,7 +229,32 @@ if __name__ == "__main__":
             raise Exception("Inference failed!\n")
     
 
-    #     # Launch data sorter component
+        # Launch data sorter component
+        tic = perf_counter()
+        print(f"Launching sorting ...", flush=True)
+        random_number_fraction = 0.0
+
+        sorter_proc = mp.Process(target=sort_controller,
+                                    args=(
+                                        data_dd,
+                                        top_candidate_number,
+                                        args.max_procs_per_node,
+                                        nodelists['sorting'],
+                                        model_list_dd,
+                                        random_number_fraction,
+                                        ),
+                                    )
+
+        sorter_proc.start()
+        sorter_proc.join()
+        if sorter_proc.exitcode != 0:
+            raise Exception("Sorting failed!\n")
+
+        toc = perf_counter()
+        sort_time = toc - tic
+        print(f"Performed sorting of {num_keys} keys in {sort_time:.3f} seconds \n", flush=True)
+
+    
     #     print(f"Launching sorting ...", flush=True)
     #     tic = perf_counter()
     #     if iter == 0:
@@ -266,36 +295,63 @@ if __name__ == "__main__":
     #     sort_time = toc - tic
     #     print(f"Performed sorting of {num_keys} keys in {sort_time:.3f} seconds \n", flush=True)
 
-    #     # Launch Docking Simulations
-    #     print(f"Launched Docking Simulations", flush=True)
-    #     tic = perf_counter()
+        # Launch Docking Simulations
+        print(f"Launched Docking Simulations", flush=True)
+        tic = perf_counter()
+
+        num_procs = args.max_procs_per_node * node_counts["docking"]
+        num_procs = min(num_procs, top_candidate_number//4)
+        num_procs = max(num_procs, node_counts["docking"])
+        dock_proc = mp.Process(
+            target=launch_docking_sim,
+            args=(sim_dd, 
+                    model_list_dd, 
+                    num_procs, 
+                    nodelists["docking"],),
+        )
+
+
+
     #     num_procs = args.max_procs_per_node * node_counts["docking"]
     #     num_procs = min(num_procs, top_candidate_number//4)
     #     dock_proc = mp.Process(
     #         target=launch_docking_sim,
     #         args=(cand_dd, iter, num_procs, nodelists["docking"]),
     #     )
-    #     dock_proc.start()
-    #     dock_proc.join()
-    #     toc = perf_counter()
-    #     dock_time = toc - tic
-    #     #os.rename("finished_run_docking.log", f"finished_run_docking_{iter}.log")
-    #     print(f"Performed docking in {dock_time:.3f} seconds \n", flush=True)
+        dock_proc.start()
+        dock_proc.join()
+        toc = perf_counter()
+        dock_time = toc - tic
+        #os.rename("finished_run_docking.log", f"finished_run_docking_{iter}.log")
+        print(f"Performed docking in {dock_time:.3f} seconds \n", flush=True)
         
-    #     print(f"Candidate Dictionary stats:", flush=True)
-    #     print(cand_dd.stats)
-    #     if dock_proc.exitcode != 0:
-    #         raise Exception("Docking sims failed\n")
+        print(f"Candidate Dictionary stats:", flush=True)
+        print(sim_dd.stats)
+        if dock_proc.exitcode != 0:
+            raise Exception("Docking sims failed\n")
 
 
         # Checkpoint the model_list_dd
         model_list_dd.checkpoint()
 
     #     # Launch Training
-    #     print(f"Launched Fine Tune Training", flush=True)
-    #     tic = perf_counter()
-    #     BATCH = 64
-    #     EPOCH = 500
+        print(f"Launched Fine Tune Training", flush=True)
+        tic = perf_counter()
+        BATCH = 64
+        EPOCH = 500
+
+        train_proc = mp.Process(
+        target=launch_training,
+        args=(
+            model_list_dd,
+            nodelists["training"][0],  # training is always 1 node
+            sim_dd,
+            BATCH,
+            EPOCH,
+        ),
+    )
+
+
     #     train_proc = mp.Process(
     #         target=launch_training,
     #         args=(
@@ -306,28 +362,26 @@ if __name__ == "__main__":
     #             EPOCH,
     #         ),
     #     )
-    #     train_proc.start()
-    #     train_proc.join()
-    #     toc = perf_counter()
-    #     train_time = toc - tic
-    #     print(f"Performed training in {train_time} seconds \n", flush=True)
-    #     if train_proc.exitcode != 0:
-    #         raise Exception("Training failed\n")
-    #     iter_end = perf_counter()
-    #     iter_time = iter_end - iter_start
-    #     print(
-    #         f"Performed iter {iter} in {iter_time} seconds \n", flush=True
-    #     )
-    #     with open("driver_times.log", "a") as f:
-    #         f.write(f"{iter}  {infer_time}  {sort_time}  {dock_time}  {train_time}\n")
+        train_proc.start()
+        train_proc.join()
+        toc = perf_counter()
+        train_time = toc - tic
+        print(f"Performed training in {train_time} seconds \n", flush=True)
+        if train_proc.exitcode != 0:
+            raise Exception("Training failed\n")
+        iter_end = perf_counter()
+        iter_time = iter_end - iter_start
+        print(
+            f"Performed iter {iter} in {iter_time} seconds \n", flush=True
+        )
+        with open("driver_times.log", "a") as f:
+            f.write(f"{iter}  {infer_time}  {sort_time}  {dock_time}  {train_time}\n")
 
-    #     tic = perf_counter()
-    #     output_sims(cand_dd, iter=iter)
-    #     toc = perf_counter()
-    #     print(f"Output candidates in {toc -tic} seconds",flush=True)
+        # tic = perf_counter()
+        # output_sims(sim_dd, iter=iter)
+        # toc = perf_counter()
+        # print(f"Output candidates in {toc -tic} seconds",flush=True)
     
-
-        
         iter += 1
 
 

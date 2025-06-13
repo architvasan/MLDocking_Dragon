@@ -61,8 +61,8 @@ def fine_tune(model_list_dd: DDict,
         else:
             ######## Build model #############
                 
-            model, model_iter, hyper_params = retrieve_model_from_dict(model_list_dd,)
-            model_iter += 1
+            model, hyper_params = retrieve_model_from_dict(model_list_dd,)
+            model_iter = model_list_dd.current_checkpoint_id
 
             for layer in model.layers:
                 if layer.name not in ['dropout_3', 'dense_3', 'dropout_4', 'dense_4', 'dropout_5', 'dense_5', 'dropout_6', 'dense_6']:
@@ -102,11 +102,13 @@ def fine_tune(model_list_dd: DDict,
                     with open("model_iter",'w') as f:
                         f.write(f"{model_iter=} {model_path=}")
 
-                save_model_weights(model_list_dd, model, model_iter)
+                save_model_weights(model_list_dd, model)
                 print("Saved fine tuned model to dictionary",flush=True)
-                new_model_event.set()
-                barrier.wait()
-                new_model_event.clear()
+                if new_model_event is not None:
+                    new_model_event.set()
+                    barrier.wait()
+                    new_model_event.clear()
+        training_iter += 1
             
 
 

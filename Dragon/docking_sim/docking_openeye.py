@@ -326,10 +326,10 @@ def continue_simulations(continue_event, sim_iter):
 
 def run_docking(sim_dd, 
                 model_list_dd, 
-                continue_event, 
                 proc: int, 
                 num_procs: int, 
                 barrier=None, 
+                continue_event=None,
                 list_poll_interval_sec=60):
     #print(f"Dock worker {proc} starting...", flush=True)
     debug = True
@@ -344,7 +344,10 @@ def run_docking(sim_dd,
     
     # Get keys
     ckeys = model_list_dd.keys()
-
+    print(f"Docking worker {proc} starting...", flush=True)
+    docking_iter = model_list_dd.bget("current_sort_iter")
+    print(f"Docking worker {proc} starting on iter {docking_iter}", flush=True)
+    ckey_max = docking_iter
     if debug:
         with open(log_file_name,"a") as f:
             f.write(f"{datetime.datetime.now()}: Docking worker on iter {docking_iter} with candidate list {ckey_max}\n")

@@ -4,7 +4,7 @@ from dragon.native.machine import System, Node
 
 def output_sims(cdd: DDict, iter=0):
 
-    candidate_list = cdd['simulated_compounds']
+    candidate_list = cdd.keys()
 
     with open(f'top_candidates_{iter}.out','w') as f:
         f.write("# smiles  docking_score  inf_scores(score model_iter) \n")

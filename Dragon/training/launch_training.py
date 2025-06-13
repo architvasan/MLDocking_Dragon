@@ -13,10 +13,10 @@ from .smiles_regress_transformer_run import fine_tune
 
 
 def launch_training(model_list_dd: DDict, node, sim_dd: DDict,
-                    continue_event,
-                    new_model_event,
-                    barrier,
-                    BATCH, EPOCH):
+                    BATCH, EPOCH,
+                    continue_event=None,
+                    new_model_event=None,
+                    barrier=None,):
     """Launch the inference ruotine
 
     :param dd: Dragon distributed dictionary
