@@ -11,6 +11,7 @@ def output_sims(cdd: DDict, iter=0):
         for i in range(len(candidate_list)):
             smiles = candidate_list[i]
             results = cdd[smiles]
+            print(results)
             inference_scores = results['inf_scores']
             #print(inference_scores,flush=True)
             docking_score = results['dock_score']

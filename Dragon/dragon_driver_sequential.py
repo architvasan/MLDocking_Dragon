@@ -239,6 +239,7 @@ if __name__ == "__main__":
                                             data_dd,
                                             top_candidate_number,
                                             cand_dd,
+                                            True,
                                             ),
                                       )
             sorter_proc.start()

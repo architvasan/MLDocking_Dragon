@@ -348,10 +348,12 @@ def run_docking(cdd, docking_iter, proc: int, num_procs: int):
         top_candidates_list += random_candidates_list
                              
     top_candidates_dict = {}
+    count=0
     for i in range(len(top_candidates_list)):
         cand = top_candidates_list[i]
         top_candidates_dict[cand[0]] = (cand[1],cand[2])
-
+        count+=1
+    print(f"added {count} key-value pairs to top_candidates_dict")
     top_candidates_smiles = list(top_candidates_dict.keys())
     # # previous sorted list
     # ckey_prev = str(int(ckey_max) - 1)

@@ -110,7 +110,7 @@ if __name__ == "__main__":
     print(f"on {num_tot_nodes} nodes", flush=True)
 
     # Launch the data loader component
-    max_procs = args.max_procs_per_node * num_tot_nodes
+    max_procs = min(args.max_procs_per_node, 8) * num_tot_nodes
     print("Loading inference data into Dragon Dictionary ...", flush=True)
     tic = perf_counter()
     loader_proc = mp.Process(

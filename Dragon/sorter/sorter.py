@@ -231,7 +231,7 @@ def comparator(x, y):
     return x[0] > y[0]
 
 
-def sort_dictionary(dd: DDict, num_return_sorted, cdd: DDict):
+def sort_dictionary(dd: DDict, num_return_sorted, cdd: DDict, output_list=False):
 
     print(f"Finding the best {num_return_sorted} candidates.", flush=True)
     candidate_list = []
@@ -251,7 +251,7 @@ def sort_dictionary(dd: DDict, num_return_sorted, cdd: DDict):
     sort_val = {"inf": list(candidate_inf), 
                 "smiles": list(candidate_smiles), 
                 "model_iter": list(candidate_model_iter)}
-
+    
     current_sort_iter = cdd.bget("current_sort_iter")
     if current_sort_iter > -1:
         current_sort_list = cdd.bget("current_sort_list")
@@ -261,6 +261,11 @@ def sort_dictionary(dd: DDict, num_return_sorted, cdd: DDict):
     cdd.bput("current_sort_iter", new_sort_iter)
     cdd.bput("current_sort_list", sort_val)
 
+    if output_list:
+        with open(f"sort_list_{new_sort_iter}.out", "w") as f:
+            lines = [f"\n{cand[1]} {cand[0]} {cand[2]}" for cand in candidate_list]
+            f.write("# smiles inf_score model_iter")
+            f.writelines(lines)
     #cdd[ckey] = sort_val
     #cdd["sort_iter"] = int(ckey)
     #cdd["max_sort_iter"] = ckey

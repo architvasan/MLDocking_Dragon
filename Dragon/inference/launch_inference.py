@@ -99,6 +99,7 @@ def launch_inference(dd: DDict, nodelist, num_procs: int, inf_num_limit):
                                                         proc_id, 
                                                         None, # Continue event not used in sequential wf
                                                         inf_num_limit,
+                                                           False,
                                                         ), 
                                                      cwd=run_dir,
                                                      policy=local_policy,))
