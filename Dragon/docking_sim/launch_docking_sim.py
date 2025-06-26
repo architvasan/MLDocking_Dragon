@@ -12,7 +12,11 @@ from dragon.native.machine import Node
 from .docking_openeye import run_docking
 
 
-def launch_docking_sim(sim_dd, model_list_dd, num_procs, nodelist, continue_event=None):
+def launch_docking_sim(sim_dd, 
+                        model_list_dd, 
+                        num_procs, 
+                        nodelist, 
+                        continue_event=None):
     """Launch docking simulations
 
     :param cdd: Dragon distributed dictionary for top candidates

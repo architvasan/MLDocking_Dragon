@@ -239,6 +239,7 @@ if __name__ == "__main__":
     # Launch data sorter component
     print(f"Launching sorting ...", flush=True)
 
+    random_number_fraction = 0
     sorter_proc = mp.Process(target=sort_controller,
                                 args=(
                                     data_dd,
@@ -246,6 +247,7 @@ if __name__ == "__main__":
                                     args.max_procs_per_node,
                                     nodelists['sorting'],
                                     model_list_dd,
+                                    random_number_fraction,
                                     continue_event,
                                     ),
                                 )
@@ -266,7 +268,11 @@ if __name__ == "__main__":
     num_procs = max(num_procs, node_counts["docking"])
     dock_proc = mp.Process(
         target=launch_docking_sim,
-        args=(sim_dd, model_list_dd, num_procs, nodelists["docking"], continue_event,),
+        args=(sim_dd, 
+            model_list_dd, 
+            num_procs, 
+            nodelists["docking"], 
+            continue_event,),
     )
     dock_proc.start()
     
@@ -295,11 +301,11 @@ if __name__ == "__main__":
             model_list_dd,
             nodelists["training"][0],  # training is always 1 node
             sim_dd,
+            BATCH,
+            EPOCH,
             continue_event,
             new_model_event,
             barrier,
-            BATCH,
-            EPOCH,
         ),
     )
     train_proc.start()
