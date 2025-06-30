@@ -1,7 +1,5 @@
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' 
-# import logging
-# logger = logging.getLogger(__name__)
+import logging
 from time import perf_counter
 import argparse
 from typing import List
@@ -24,6 +22,9 @@ from data_loader.data_loader_presorted import get_files
 from data_loader.model_loader import load_pretrained_model
 from driver_functions import max_data_dict_size, output_sims
 
+logger = logging.getLogger("__name__")
+logging.basicConfig(filename="driver.log", encoding='utf-8', level=logging.INFO,
+                    format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
 
 if __name__ == "__main__":
 
@@ -48,6 +49,10 @@ if __name__ == "__main__":
     start_time = perf_counter()
     print("Begun dragon driver", flush=True)
     print(f"Reading inference data from path: {args.data_path}", flush=True)
+
+    logger.info("Begun dragon driver")
+    logger.info(f"Reading inference data from path: {args.data_path}")
+
     mp.set_start_method("dragon")
 
     with open("driver_times.log", "w") as f:
@@ -94,7 +99,7 @@ if __name__ == "__main__":
     num_files = 128
 
     tot_mem = args.mem_per_node*num_tot_nodes
-    print(f"There are {num_files} files")
+    logger.info(f"There are {num_files} files")
 
     # There are 3 dictionaries:
     # 1. data dictionary for inference
@@ -106,13 +111,13 @@ if __name__ == "__main__":
     # Set up and launch the inference data DDict and top candidate DDict
     # Calculate memory allocation for each dictionary
     data_dict_mem, sim_dict_mem, model_list_dict_mem = max_data_dict_size(num_files, max_pool_frac=0.5)
-    print(f"Setting data_dict size to {data_dict_mem} GB")
-    print(f"Setting sim_dict size to {sim_dict_mem} GB")
-    print(f"Setting model_list_dict size to {model_list_dict_mem} GB")
+    logger.info(f"Setting data_dict size to {data_dict_mem} GB")
+    logger.info(f"Setting sim_dict size to {sim_dict_mem} GB")
+    logger.info(f"Setting model_list_dict size to {model_list_dict_mem} GB")
 
     # Check if total memory required exceeds available memory
     if data_dict_mem + sim_dict_mem + model_list_dict_mem > tot_mem:
-        print(f"Sum of dictionary sizes exceed total mem: {data_dict_mem=} {sim_dict_mem=} {model_list_dict_mem=} {tot_mem=}", flush=True)
+        logger.info(f"Sum of dictionary sizes exceed total mem: {data_dict_mem=} {sim_dict_mem=} {model_list_dict_mem=} {tot_mem=}")
         raise Exception("Not enough memory for DDicts")
 
     # Convert memory sizes to bytes
@@ -122,16 +127,16 @@ if __name__ == "__main__":
 
     # Initialize Dragon Dictionaries for inference, docking simulation, and model list
     data_dd = DDict(args.managers_per_node, num_tot_nodes, data_dict_mem)
-    print(f"Launched Dragon Dictionary for inference with total memory size {data_dict_mem} on {num_tot_nodes} nodes", flush=True)
+    logger.info(f"Launched Dragon Dictionary for inference with total memory size {data_dict_mem} on {num_tot_nodes} nodes")
     sim_dd = DDict(args.managers_per_node, num_tot_nodes, sim_dict_mem)
-    print(f"Launched Dragon Dictionary for docking simulation with total memory size {sim_dict_mem} on {num_tot_nodes} nodes", flush=True)
+    logger.info(f"Launched Dragon Dictionary for docking simulation with total memory size {sim_dict_mem} on {num_tot_nodes} nodes")
     model_list_dd = DDict(args.managers_per_node, num_tot_nodes, model_list_dict_mem, working_set_size=10, wait_for_keys=True)
-    print(f"Launched Dragon Dictionary for model list with total memory size {model_list_dict_mem} on {num_tot_nodes} nodes", flush=True)
+    logger.info(f"Launched Dragon Dictionary for model list with total memory size {model_list_dict_mem} on {num_tot_nodes} nodes")
 
 
     # Load data into the data dictionary
     max_procs = args.max_procs_per_node * num_tot_nodes
-    print("Loading inference data into Dragon Dictionary ...", flush=True)
+    logger.info("Loading inference data into Dragon Dictionary ...")
     tic = perf_counter()
     loader_proc = mp.Process(
         target=load_inference_data,
@@ -146,9 +151,9 @@ if __name__ == "__main__":
     loader_proc.start()
     loader_proc.join()
 
-    print("Here are the stats after data loading...")
-    print("Data Dictionary stats:", flush=True)
-    print(data_dd.stats)
+    logger.info("Here are the stats after data loading...")
+    logger.info("Data Dictionary stats:")
+    logger.info(data_dd.stats)
 
     # Load pretrained model
     load_pretrained_model(model_list_dd)
@@ -160,7 +165,7 @@ if __name__ == "__main__":
     toc = perf_counter()
     load_time = toc - tic
     if loader_proc.exitcode == 0:
-        print(f"Loaded inference data in {load_time:.3f} seconds", flush=True)
+        logger.info(f"Loaded inference data in {load_time:.3f} seconds")
     else:
         raise Exception(f"Data loading failed with exception {loader_proc.exitcode}")
 
@@ -182,7 +187,7 @@ if __name__ == "__main__":
         top_candidate_number = 10000
 
     # Finished dictionary initialization
-    print("Finished initializing dictionaries", flush=True)
+    logger.info("Finished initializing dictionaries")
 
 
     # New model event for training
@@ -201,14 +206,14 @@ if __name__ == "__main__":
 
     iter_start = perf_counter()
 
-    print(f"Current checkpoint: {model_list_dd.current_checkpoint_id}", flush=True)
+    logger.info(f"Current checkpoint: {model_list_dd.current_checkpoint_id}")
 
     # Launch the data inference component
     
-    print(f"Launching inference with {num_procs} processes ...", flush=True)
+    logger.info(f"Launching inference with {num_procs} processes ...")
     if num_tot_nodes < 3:
         inf_num_limit = 8
-        print(f"Running small test on {num_tot_nodes}; limiting {inf_num_limit} keys per inference worker")
+        logger.info(f"Running small test on {num_tot_nodes}; limiting {inf_num_limit} keys per inference worker")
     else:
         inf_num_limit = None
 
@@ -228,16 +233,9 @@ if __name__ == "__main__":
     )
     inf_proc.start()
     
-    # toc = perf_counter()
-    # infer_time = toc - tic
-    # print(f"Performed inference in {infer_time:.3f} seconds \n", flush=True)
-
-    # if inf_proc.exitcode != 0:
-    #     raise Exception("Inference failed!\n")
-
 
     # Launch data sorter component
-    print(f"Launching sorting ...", flush=True)
+    logger.info(f"Launching sorting ...")
 
     random_number_fraction = 0
     sorter_proc = mp.Process(target=sort_controller,
@@ -252,17 +250,10 @@ if __name__ == "__main__":
                                     ),
                                 )
     sorter_proc.start()
-    
-#     if sorter_proc.exitcode != 0:
-#         raise Exception("Sorting failed\n")
 
-#     toc = perf_counter()
-#     sort_time = toc - tic
-#     print(f"Performed sorting of {num_keys} keys in {sort_time:.3f} seconds \n", flush=True)
 
 #     # Launch Docking Simulations
-    print(f"Launched Docking Simulations", flush=True)
-#     tic = perf_counter()
+    logger.info(f"Launched Docking Simulations")
     num_procs = args.max_procs_per_node * node_counts["docking"]
     num_procs = min(num_procs, top_candidate_number//4)
     num_procs = max(num_procs, node_counts["docking"])
@@ -276,22 +267,9 @@ if __name__ == "__main__":
     )
     dock_proc.start()
     
-#     toc = perf_counter()
-#     dock_time = toc - tic
-#     #os.rename("finished_run_docking.log", f"finished_run_docking_{iter}.log")
-#     print(f"Performed docking in {dock_time:.3f} seconds \n", flush=True)
-    
-#     print(f"Candidate Dictionary stats:", flush=True)
-#     print(cand_dd.stats)
-#     if dock_proc.exitcode != 0:
-#         raise Exception("Docking sims failed\n")
-
-
-    # Checkpoint the model_list_dd
-    # model_list_dd.checkpoint()
 
 #     # Launch Training
-    print(f"Launched Fine Tune Training", flush=True)
+    logger.info(f"Launched Fine Tune Training")
     tic = perf_counter()
     BATCH = 64
     EPOCH = 500
@@ -309,35 +287,10 @@ if __name__ == "__main__":
         ),
     )
     train_proc.start()
-#     train_proc.join()
-#     toc = perf_counter()
-#     train_time = toc - tic
-#     print(f"Performed training in {train_time} seconds \n", flush=True)
-#     if train_proc.exitcode != 0:
-#         raise Exception("Training failed\n")
-#     iter_end = perf_counter()
-#     iter_time = iter_end - iter_start
-#     print(
-#         f"Performed iter {iter} in {iter_time} seconds \n", flush=True
-#     )
-#     with open("driver_times.log", "a") as f:
-#         f.write(f"{iter}  {infer_time}  {sort_time}  {dock_time}  {train_time}\n")
 
-#     tic = perf_counter()
-#     output_sims(cand_dd, iter=iter)
-#     toc = perf_counter()
-#     print(f"Output candidates in {toc -tic} seconds",flush=True)
 
     train_proc.join()
     dock_proc.join()
     sorter_proc.join()
     inf_proc.join()
   
-
-
-    # # Close the dictionary
-    # print("Closing the Dragon Dictionary and exiting ...", flush=True)
-    # # cand_dd.destroy()
-    # data_dd.destroy()
-    # end_time = perf_counter()
-    # print(f"Total time {end_time - start_time} seconds", flush=True)

@@ -219,13 +219,14 @@ def infer(data_dd,
                         f.write(f"{model_list_dd.current_checkpoint_id=}\n")
                 # model_list_dd.sync_to_newest_checkpoint()
 
-                model_list_dd._chkpt_id = checkpoint_id
+                # model_list_dd._chkpt_id = checkpoint_id
 
                 if debug:
                     with open(log_file_name, "a") as f:
                         f.write(f"{model_list_dd.current_checkpoint_id=}\n")
 
                 # Retrieve model from dictionary
+                model_list_dd.checkpoint()
                 model,hyper_params = retrieve_model_from_dict(model_list_dd)
                 model_iter = model_list_dd.current_checkpoint_id
                 BATCH = hyper_params["general"]["batch_size"]

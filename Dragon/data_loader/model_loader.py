@@ -26,13 +26,11 @@ def save_model_weights(dd: Union[DDict, dict], model, verbose = False):
     
     print(f"model weights: {num_layers=} {num_weights=} {tot_memory=}")
 
+    # Checkpoint here?
+    #dd.checkpoint()
+
     # Future version will use broadcast put to send model to every manager
     dd.bput('model', weights_dict)
-
-    #dd['model'] = weights_dict
-    #dd['model_iter'] = model_iter
-
-    # Checkpoint here?
 
     print(f"Saved model to dictionary", flush=True)
 

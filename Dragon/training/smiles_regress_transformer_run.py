@@ -22,9 +22,6 @@ import time
 import dragon
 from dragon.data.ddict.ddict import DDict
 
-#tf.config.run_functions_eagerly(True)
-#tf.enable_eager_execution()
-
 
 def continue_training(continue_event, training_iter):
     if continue_event is None:
@@ -96,13 +93,15 @@ def fine_tune(model_list_dd: DDict,
                 
                 
                 # Save to dictionary
+                model_list_dd.checkpoint()
+                save_model_weights(model_list_dd, model)
+                model_iter = model_list_dd.current_checkpoint_id
+                print(f"Saved model weights to dictionary {model_iter=}", flush=True)
                 if save_model:
                     model_path = "current_model.keras"
                     model.save(model_path)
                     with open("model_iter",'w') as f:
                         f.write(f"{model_iter=} {model_path=}")
-
-                save_model_weights(model_list_dd, model)
                 print("Saved fine tuned model to dictionary",flush=True)
                 if new_model_event is not None:
                     new_model_event.set()

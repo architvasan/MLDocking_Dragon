@@ -254,46 +254,6 @@ if __name__ == "__main__":
         sort_time = toc - tic
         print(f"Performed sorting of {num_keys} keys in {sort_time:.3f} seconds \n", flush=True)
 
-    
-    #     print(f"Launching sorting ...", flush=True)
-    #     tic = perf_counter()
-    #     if iter == 0:
-    #         cand_dd["max_sort_iter"] = "-1"
-
-    #     random_number = int(0.1*top_candidate_number)
-    #     print(f"Adding {random_number} random candidates to training", flush=True)
-    #     if os.getenv("USE_MPI_SORT"):
-    #         print("Using MPI sort",flush=True)
-    #         max_sorter_procs = args.max_procs_per_node*node_counts["sorting"]
-    #         sorter_proc = mp.Process(target=sort_dictionary_pg, 
-    #                                  args=(data_dd,
-    #                                        top_candidate_number,
-    #                                        max_sorter_procs, 
-    #                                        nodelists["sorting"],
-    #                                        cand_dd,
-    #                                        random_number,
-    #                                        ),
-    #                                 )
-    #         sorter_proc.start()
-    #         sorter_proc.join()
-    #     else:
-    #         print("Using filter sort", flush=True)
-    # TODO: pass in checkpoint id to sorting
-    #         sorter_proc = mp.Process(target=sort_dictionary,
-    #                                   args=(
-    #                                         data_dd,
-    #                                         top_candidate_number,
-    #                                         cand_dd,
-    #                                         ),
-    #                                   )
-    #         sorter_proc.start()
-    #         sorter_proc.join()
-    #     if sorter_proc.exitcode != 0:
-    #         raise Exception("Sorting failed\n")
-
-    #     toc = perf_counter()
-    #     sort_time = toc - tic
-    #     print(f"Performed sorting of {num_keys} keys in {sort_time:.3f} seconds \n", flush=True)
 
         # Launch Docking Simulations
         print(f"Launched Docking Simulations", flush=True)
@@ -310,14 +270,6 @@ if __name__ == "__main__":
                     nodelists["docking"],),
         )
 
-
-
-    #     num_procs = args.max_procs_per_node * node_counts["docking"]
-    #     num_procs = min(num_procs, top_candidate_number//4)
-    #     dock_proc = mp.Process(
-    #         target=launch_docking_sim,
-    #         args=(cand_dd, iter, num_procs, nodelists["docking"]),
-    #     )
         dock_proc.start()
         dock_proc.join()
         toc = perf_counter()
@@ -351,17 +303,6 @@ if __name__ == "__main__":
         ),
     )
 
-
-    #     train_proc = mp.Process(
-    #         target=launch_training,
-    #         args=(
-    #             data_dd,
-    #             nodelists["training"][0],  # training is always 1 node
-    #             cand_dd,
-    #             BATCH,
-    #             EPOCH,
-    #         ),
-    #     )
         train_proc.start()
         train_proc.join()
         toc = perf_counter()
@@ -377,17 +318,6 @@ if __name__ == "__main__":
         with open("driver_times.log", "a") as f:
             f.write(f"{iter}  {infer_time}  {sort_time}  {dock_time}  {train_time}\n")
 
-        # tic = perf_counter()
-        # output_sims(sim_dd, iter=iter)
-        # toc = perf_counter()
-        # print(f"Output candidates in {toc -tic} seconds",flush=True)
     
         iter += 1
 
-
-    # # Close the dictionary
-    # print("Closing the Dragon Dictionary and exiting ...", flush=True)
-    # # cand_dd.destroy()
-    # data_dd.destroy()
-    # end_time = perf_counter()
-    # print(f"Total time {end_time - start_time} seconds", flush=True)
