@@ -1,5 +1,5 @@
 import os
-
+import logging
 import dragon
 import multiprocessing as mp
 from dragon.native.process_group import ProcessGroup
@@ -10,6 +10,8 @@ from dragon.infrastructure.policy import Policy
 from dragon.native.machine import Node
 
 from .docking_openeye import run_docking
+
+from logging_config import sim_logger as logger
 
 
 def launch_docking_sim(sim_dd, 
@@ -30,7 +32,7 @@ def launch_docking_sim(sim_dd,
 
     skip_threads = os.getenv("SKIP_THREADS")
     if skip_threads:
-        print(f"skipping threads {skip_threads}",flush=True)
+        logger.info(f"skipping threads {skip_threads}")
         skip_threads = skip_threads.split(',')
         skip_threads = [int(t) for t in skip_threads]
     else:
@@ -48,7 +50,7 @@ def launch_docking_sim(sim_dd,
         for proc in range(num_procs_pn):
             # Skip skip threads and threads bound to inference gpus
             if proc in skip_threads or proc in inf_cpu_bind:
-                print(f"Skipping thread {proc} for docking",flush=True)
+                logger.info(f"Skipping thread {proc} for docking")
                 continue
             else:
                 proc_count += 1
@@ -71,7 +73,7 @@ def launch_docking_sim(sim_dd,
         barrier = mp.Barrier(parties=proc_count,)
     
         
-    print(f"Docking Sims using {proc_count} processes", flush=True)
+    logger.info(f"Docking Sims using {proc_count} processes")
     
 
     # Create the process group
@@ -83,7 +85,7 @@ def launch_docking_sim(sim_dd,
             if proc in skip_threads or proc in inf_cpu_bind:
                 continue
             proc_id = node_num*num_procs_pn+proc
-            print(f"{proc_id} on {node_name} using proc {proc}", flush=True)
+            logger.debug(f"{proc_id} on {node_name} using proc {proc}")
             local_policy = Policy(placement=Policy.Placement.HOST_NAME,
                                   host_name=node_name,
                                   cpu_affinity=[proc])
@@ -103,9 +105,9 @@ def launch_docking_sim(sim_dd,
     # Launch the ProcessGroup
     grp.init()
     grp.start()
-    print(f"Starting Process Group for Docking Sims on {num_procs} procs", flush=True)
+    logger.info(f"Starting Process Group for Docking Sims on {num_procs} procs")
     grp.join()
-    print(f"Joined Process Group for Docking Sims",flush=True)
+    logger.info(f"Joined Process Group for Docking Sims")
     grp.close()
 
     # Collect candidate keys and save them to simulated keys

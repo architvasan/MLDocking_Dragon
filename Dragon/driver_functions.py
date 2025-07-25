@@ -1,5 +1,7 @@
+import logging
 from dragon.data.ddict import DDict
 from dragon.native.machine import System, Node
+from logging_config import driver_logger as logger
 
 
 def output_sims(cdd: DDict, iter=0):
@@ -12,7 +14,7 @@ def output_sims(cdd: DDict, iter=0):
             smiles = candidate_list[i]
             results = cdd[smiles]
             inference_scores = results['inf_scores']
-            #print(inference_scores,flush=True)
+            logger.debug(inference_scores)
             docking_score = results['dock_score']
             line = f"{smiles}    {docking_score}    "
             for inf_result in inference_scores:
@@ -27,7 +29,7 @@ def max_data_dict_size(num_keys: int,
                        canidate_sim_size_per_iter=1.5, 
                        max_pool_frac=0.8):
 
-    print(f"Estimating dictionary sizes with a maximum data pool utiliztion of {max_pool_frac*100} per cent", flush=True)
+    logger.info(f"Estimating dictionary sizes with a maximum data pool utiliztion of {max_pool_frac*100} per cent")
 
     # Get information about the allocation
     alloc = System()
@@ -61,7 +63,7 @@ def max_data_dict_size(num_keys: int,
 
     max_mem = ddict_mem_check()
 
-    print(f"Memory available for ddicts: {max_mem} GB")
+    logger.info(f"Memory available for ddicts: {max_mem} GB")
 
     if sim_dict_size + data_dict_size + model_dict_size > max_mem:
         raise Exception(f"Not enough mem for dictionaries: {max_mem=} {max_pool_frac=} {data_dict_size=} {cand_dict_size=}")

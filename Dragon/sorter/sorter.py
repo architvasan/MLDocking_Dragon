@@ -4,6 +4,7 @@ import os
 import random
 import gc
 import dragon
+import logging
 import multiprocessing as mp
 from dragon.data.ddict.ddict import DDict
 from dragon.native.process_group import ProcessGroup
@@ -21,6 +22,7 @@ import socket
 import traceback
 
 from data_loader.data_loader_presorted import load_inference_data, initialize_worker
+from logging_config import sort_logger as logger
 
 
 MAX_BRANCHING_FACTOR = 5
@@ -138,11 +140,9 @@ def sort_controller(
 ):
 
     iter = 0
-    with open("sort_controller.log", "a") as f:
-        f.write(f"{datetime.datetime.now()}: Starting Sort Controller\n")
-        f.write(
-            f"{datetime.datetime.now()}: Sorting for {top_candidate_number} candidates\n"
-        )
+    
+    logger.info("Starting Sort Controller")
+    logger.info(f"Sorting for {top_candidate_number} candidates")
 
     ckeys = model_list_dd.keys()
     if "current_sort_iter" not in ckeys:
@@ -156,15 +156,13 @@ def sort_controller(
         if continue_event is not None:
             time.sleep(checkpoint_interval_min * 60)
 
-        with open("sort_controller.log", "a") as f:
-            f.write(f"{datetime.datetime.now()}: Starting iter {iter}\n")
+        logger.info(f"Starting iter {iter}")
         tic = perf_counter()
-        print(f"Sort iter {iter}", flush=True)
 
         random_number = int(random_number_fraction*top_candidate_number)
-        print(f"Adding {random_number} random candidates to training", flush=True)
+        logger.info(f"Adding {random_number} random candidates to training")
         if os.getenv("USE_MPI_SORT"):
-            print("Using MPI sort",flush=True)
+            logger.info("Using MPI sort")
             max_sorter_procs = max_procs*len(nodelist)
             sorter_proc = mp.Process(target=sort_dictionary_pg, 
                                     args=(dd,
@@ -178,7 +176,7 @@ def sort_controller(
             sorter_proc.start()
             sorter_proc.join()
         else:
-            print("Using filter sort", flush=True)
+            logger.info("Using filter sort")
     #TODO: pass in checkpoint id to sorting
             sorter_proc = mp.Process(target=sort_dictionary,
                                     args=(
@@ -241,7 +239,7 @@ def comparator(x, y):
 
 def sort_dictionary(dd: DDict, num_return_sorted, cdd: DDict):
 
-    print(f"Finding the best {num_return_sorted} candidates.", flush=True)
+    logger.info(f"Finding the best {num_return_sorted} candidates.")
     candidate_list = []
 
     with dd.filter(get_largest, (num_return_sorted,), comparator) as candidates:
@@ -250,9 +248,9 @@ def sort_dictionary(dd: DDict, num_return_sorted, cdd: DDict):
             if len(candidate_list) == num_return_sorted:
                 break
 
-    print("HERE IS THE CANDIDATE LIST (first 10 only)")
-    print("******************************************", flush=True)
-    print(candidate_list[:10], flush=True)
+    logger.info("HERE IS THE CANDIDATE LIST (first 10 only)")
+    logger.info("******************************************")
+    logger.info(candidate_list[:10])
 
     candidate_inf,candidate_smiles,candidate_model_iter = zip(*candidate_list)
     non_zero_infs = len([cinf for cinf in candidate_inf if cinf != 0])
@@ -269,7 +267,7 @@ def sort_dictionary(dd: DDict, num_return_sorted, cdd: DDict):
     cdd.bput("current_sort_iter", new_sort_iter)
     cdd.bput("current_sort_list", sort_val)
 
-    print(f"Finished filter sort")
+    logger.info(f"Finished filter sort")
     #cdd[ckey] = sort_val
     #cdd["sort_iter"] = int(ckey)
     #cdd["max_sort_iter"] = ckey
@@ -311,7 +309,7 @@ def make_random_compound_selection(random_number):
                     jrand = random.randint(0,len(smiles)-1)
                     random_selection.append((smiles[jrand],inf_val[jrand], model_iter))
     except Exception as e:
-        print(f"Pool worker failed with this error {e}",flush=True)
+        logger.error(f"Pool worker failed with this error {e}")
         raise Exception(e)
     
     return random_selection
@@ -336,12 +334,12 @@ def sort_dictionary_pg(dd: DDict,
     direct_sort_num = max(num_keys//num_procs+1,min_direct_sort_num)
     num_procs_pn = keys_per_node // direct_sort_num
     
-    print(f"Direct sorting {direct_sort_num} keys per process",flush=True)
+    logger.info(f"Direct sorting {direct_sort_num} keys per process")
 
     global_policy = Policy(distribution=Policy.Distribution.BLOCK)
     grp = ProcessGroup(policy=global_policy, pmi_enabled=True)
 
-    print(f"Launching sorting process group {nodelist}", flush=True)
+    logger.info(f"Launching sorting process group {nodelist}")
     for node in nodelist:
         node_name = Node(node).hostname
         local_policy = Policy(placement=Policy.Placement.HOST_NAME, 
@@ -354,15 +352,15 @@ def sort_dictionary_pg(dd: DDict,
                                                     args=(dd, num_keys, num_return_sorted,cdd), 
                                                     policy=local_policy,
                                                     cwd=run_dir))
-    print(f"Added processes to sorting group",flush=True)
+    logger.info(f"Added processes to sorting group")
     grp.init()
     grp.start()
-    print(f"Starting Process Group for Sorting",flush=True)
+    logger.info(f"Starting Process Group for Sorting")
     grp.join()
-    print(f"Process Group for Sorting has joined",flush=True)
+    logger.info(f"Process Group for Sorting has joined")
     grp.close()
 
-    print("Getting random compounds",flush=True)
+    logger.info("Getting random compounds")
     # Grab random compounds from each node
 
     if random_number > 0:
@@ -386,7 +384,7 @@ def sort_dictionary_pg(dd: DDict,
                 random_model.append(mi)
         pool.close()
         pool.join()
-        print(f"Randomly sampled {len(random_smiles)} random smiles for simulation", flush=True)
+        logger.info(f"Randomly sampled {len(random_smiles)} random smiles for simulation")
         cdd['random_compound_sample'] = {'smiles': random_smiles,
                                         'inf': random_inf,
                                         'model_iter': random_model,}

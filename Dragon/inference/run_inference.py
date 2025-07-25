@@ -4,12 +4,13 @@ from typing import List
 import numpy as np
 import psutil
 import os
-from time import perf_counter
+from time import perf_counter, sleep
 import random
 import gc
 import socket
 from tqdm import tqdm
 from dragon.utils import host_id
+import logging
 
 #from inference.utils_transformer import ParamsJson, ModelArchitecture, pad
 from inference.utils_transformer import pad
@@ -17,7 +18,8 @@ from inference.utils_encoder import SMILES_SPE_Tokenizer
 #from training.ST_funcs.clr_callback import *
 #from training.ST_funcs.smiles_regress_transformer_funcs import *
 from data_loader.model_loader import retrieve_model_from_dict
-
+from logging_config import inf_logger as logger
+from logging_config import setup_logger
 import keras
 import tensorflow as tf
 tf.get_logger().setLevel('ERROR')
@@ -27,10 +29,14 @@ tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
 driver_path = os.getenv("DRIVER_PATH")
 
+#logger = setup_logger('inf', "inference.log", level=logging.INFO)
 
-def eprint(*args, **kwargs):
-    print(*args, file=sys.stderr, **kwargs)
-
+#logger = logging.getLogger(__name__)
+# logger = logging.getLogger('inference')
+# handler = logging.StreamHandler()
+# handler.setFormatter(logging.Formatter('INFERENCE %(levelname)s: %(asctime)s: %(message)s', 
+#                                         datefmt='%m-%d-%Y %I:%M:%S %p'))
+# logger.addHandler(handler)
 
 def split_dict_keys(keys: List[str], size: int, proc: int) -> List[str]:
     """Read the keys containing inference data from the Dragon Dictionary
@@ -46,32 +52,18 @@ def split_dict_keys(keys: List[str], size: int, proc: int) -> List[str]:
     :rtype: List[str]
     """
     num_keys = len(keys)
-    try:
-        keys_per_proc = num_keys // size
-        remainder = num_keys % size
+  
+    keys_per_proc = num_keys // size
+    remainder = num_keys % size
 
-        next_start_index = 0
-        for i in range(proc+1):
-            start_index = next_start_index
-            end_index = min(start_index + keys_per_proc + (1 if i < remainder else 0),
-                            num_keys)
-            next_start_index = end_index
-        split_keys = keys[start_index:end_index]
-    except Exception as e:
-        with open("error.out",'a') as f:
-            f.write(f"Exception {e}\n")
-
-    #if num_keys / size - num_keys // size > 0:
-    #    num_keys_per_proc = num_keys // size + 1
-    #else:
-    #    num_keys_per_proc = num_keys // size
-    #start_ind = proc * num_keys_per_proc
-    #end_ind = (proc + 1) * num_keys_per_proc
-    #if proc != (size - 1):
-    #    split_keys = keys[start_ind:end_ind]
-    #else:
-    #    split_keys = keys[start_ind:]
-
+    next_start_index = 0
+    for i in range(proc+1):
+        start_index = next_start_index
+        end_index = min(start_index + keys_per_proc + (1 if i < remainder else 0),
+                        num_keys)
+        next_start_index = end_index
+    split_keys = keys[start_index:end_index]
+   
     random.shuffle(split_keys)
     return split_keys
 
@@ -104,12 +96,11 @@ def load_model(new_model_event, i):
     :return: True if the model should be loaded, False otherwise
     :rtype: bool
     """
-    # Load model on first key of first analysis iteration always
-    if i == 0:
-        return True
     # If new_model_event is not None, it means we are running the async workflow
     if new_model_event is not None:
-        return new_model_event.is_set()  
+        return new_model_event.is_set()
+    else:
+        return False
 
 def continue_inference(continue_event, reanalysis_iter):
     """Check if inference should continue
@@ -142,40 +133,42 @@ def infer(data_dd,
     """Run inference reading from and writing data to the Dragon Dictionary"""
     gc.collect()
     # !!! DEBUG !!!
-    if debug:
-        p = psutil.Process()
-        core_list = p.cpu_affinity()
-        log_file_name = f"infer_worker_{proc}.log"
-        print(f"Opening inference worker log {log_file_name}", flush=True)
-        with open(log_file_name,'a') as f:
-            f.write(f"\n\nNew run\n")
-            f.write(f"Hello from process {p} on core {core_list}\n")
-            f.flush()
-        cuda_device = os.getenv("CUDA_VISIBLE_DEVICES")
-        pvc_device = os.getenv("ZE_AFFINITY_MASK")
-        device = None
-        if cuda_device:
-            device = cuda_device
-        if pvc_device:
-            device = pvc_device
-        hostname = socket.gethostname()
-        print(f"Launching infer for worker {proc} from process {p} on core {core_list} on device {hostname}:{device}", flush=True)
+
+    os.makedirs("inference_worker_logs", exist_ok=True)
+    worker_logger = setup_logger(f'inf_worker_{proc}', f"inference_worker_logs/inference_worker_{proc}.log", level=logging.DEBUG)
+    worker_logger.info(f"Starting inference worker {proc} with {num_procs} procs")
     
+    p = psutil.Process()
+    core_list = p.cpu_affinity()
+    
+    logger.info(f"Opening inference worker log: inference_worker_logs/inference_worker_{proc}.log")
+    worker_logger.debug(f"\n\nNew run")
+        
+    cuda_device = os.getenv("CUDA_VISIBLE_DEVICES")
+    pvc_device = os.getenv("ZE_AFFINITY_MASK")
+    device = None
+    if cuda_device:
+        device = cuda_device
+    if pvc_device:
+        device = pvc_device
+    hostname = socket.gethostname()
+    worker_logger.debug(f"Launching infer for worker {proc} from process {p} on core {core_list} on device {hostname}:{device}")
+
     
     # Get local keys
     current_host = host_id()
     manager_nodes = data_dd.manager_nodes
     keys = []
-    print(f"{current_host=}",flush=True)
+    worker_logger.debug(f"{current_host=}")
     if proc == 0:
-        print(f"{manager_nodes=}",flush=True)
+        logger.debug(f"{manager_nodes=}")
     for i in range(len(manager_nodes)):
         if manager_nodes[i].h_uid == current_host:
             local_manager = i
             #print(f"{proc}: getting keys from local manager {local_manager}")
             dm = data_dd.manager(i)
             keys.extend(dm.keys())
-    print(f"{proc}: found {len(keys)} local keys")
+    worker_logger.debug(f"{proc}: found {len(keys)} local keys")
 
     # Split keys in Dragon Dict    
     keys = [k for k in keys if "iter" not in k and "model" not in k]
@@ -186,9 +179,7 @@ def infer(data_dd,
     else:
         split_keys = keys
     #print(f"{proc}: {split_keys}",flush=True)
-    if debug:
-        with open(log_file_name, "a") as f:
-            f.write(f"Running inference on {len(split_keys)} keys\n")
+    worker_logger.debug(f"Running inference on {len(split_keys)} keys")
      
     
     # Set up tokenizer
@@ -206,45 +197,55 @@ def infer(data_dd,
     # Iterate over keys in Dragon Dict
     
     cutoff = 9
-    print(f"worker {proc} processing {num_run} keys",flush=True)
-    continue_event = None
+    logger.info(f"worker {proc} processing {num_run} keys")
     reanalysis_iter = 0
     
+    model,hyper_params = retrieve_model_from_dict(model_list_dd, checkpoint=False)
+    model_iter = model_list_dd.checkpoint_id
+    BATCH = hyper_params["general"]["batch_size"]
+
+    completed_keys = []
+
     while continue_inference(continue_event, reanalysis_iter):
+        worker_logger.debug(f"On reanalysis_iter {reanalysis_iter}\n")
+
+        # If all keys have been processed, continue to next iteration
+        if len(completed_keys) >= num_run and not load_model(new_model_event, reanalysis_iter):
+            logger.info(f"worker {proc} has completed all {num_run} keys and there is no new model to load")
+            sleep(10)
+            continue
+
+        # If there are unprocessed keys, loop through keys
         for ikey in range(num_run):
+            key = split_keys[ikey]
+            # If the model has been updated, load it
             if load_model(new_model_event, ikey+reanalysis_iter):
-                # Load model from dictionary
-                if debug:
-                    with open(log_file_name, "a") as f:
-                        f.write(f"{model_list_dd.current_checkpoint_id=}\n")
-                # model_list_dd.sync_to_newest_checkpoint()
+                # Reset completed keys
+                completed_keys = []
 
-                # model_list_dd._chkpt_id = checkpoint_id
-
-                if debug:
-                    with open(log_file_name, "a") as f:
-                        f.write(f"{model_list_dd.current_checkpoint_id=}\n")
+                worker_logger.debug(f"{model_list_dd.checkpoint_id=}")
 
                 # Retrieve model from dictionary
-                model_list_dd.checkpoint()
-                model,hyper_params = retrieve_model_from_dict(model_list_dd)
-                model_iter = model_list_dd.current_checkpoint_id
-                BATCH = hyper_params["general"]["batch_size"]
+                model,_ = retrieve_model_from_dict(model_list_dd, checkpoint=True, 
+                                                                retrieve_hyper_params=False)
+                model_iter = model_list_dd.checkpoint_id
                 
-                if debug:
-                    with open(log_file_name, "a") as f:
-                        f.write(f"Loaded model from checkpoint {model_iter}\n")
+                worker_logger.debug(f"Loaded model from checkpoint {model_iter}")
                 if bar is not None and reanalysis_iter+ikey > 0:
-                    print(f"worker {proc} waiting for barrier sync", flush=True)
+                    worker_logger.debug(f"worker {proc} waiting for barrier sync")
                     bar.wait()
                 else:
-                    print(f"worker {proc} proceeding to inference", flush=True)
-            # Print progress to stdout every 8 iters
-            if ikey%8 == 0:
-                print(f"...worker {proc} has completed {ikey} keys out of {num_run} with model {model_iter}", flush=True)
+                    logger.info(f"worker {proc} proceeding to inference")
+            
+            # If the key has already been processed, skip it
+            if key in completed_keys:
+                continue
+            
+            ## Print progress to stdout every 8 iters
+            #if ikey%8 == 0:
+            #    logger.info(f"...worker {proc} has completed {ikey} keys out of {num_run} with model {model_iter}")
             if continue_inference(continue_event, reanalysis_iter):  # this check is to stop inference in async wf when model is retrained
                 ktic = perf_counter()
-                key = split_keys[ikey]
                 dict_tic = perf_counter()
                 
                 # print(f"worker {proc}: getting val from dd",flush=True)
@@ -298,19 +299,14 @@ def infer(data_dd,
                 key_time = ktoc - ktic
                 dictionary_time += key_dictionary_time
                 data_moved_size += key_data_moved_size
-
-                if debug:
-                    with open(log_file_name, "a") as f:
-                        f.write(
+                completed_keys.append(key)
+                worker_logger.debug(
                             f"Performed inference on key {key} {key_time=} {len(smiles_sorted)=} {key_data_moved_size=} {key_dictionary_time=}\n"
                         )
-                    #print(
-                    #    f"Performed inference on key {key} {key_time=} {len(smiles_sorted)=} {key_data_moved_size=} {key_dictionary_time=}",
-                        #   flush=True,
-                    #)
             else:
                 break
         reanalysis_iter += 1
+        
     toc = perf_counter()
 
     metrics = {
@@ -319,7 +315,7 @@ def infer(data_dd,
         "data_move_time": dictionary_time,
         "data_move_size": data_moved_size,
     }
-    print(f"worker {proc} is all DONE!! :)", flush=True)
+    logger.info(f"worker {proc} is all DONE!! :)")
     return metrics
 ## Run main
 if __name__ == "__main__":

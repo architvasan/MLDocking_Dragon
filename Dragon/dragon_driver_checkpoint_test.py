@@ -193,7 +193,7 @@ if __name__ == "__main__":
         print(f"*** Start loop iter {iter} ***")
         iter_start = perf_counter()
 
-        print(f"Current checkpoint: {model_list_dd.current_checkpoint_id}", flush=True)
+        print(f"Current checkpoint: {model_list_dd.checkpoint_id}", flush=True)
 
         # Launch the data inference component
         num_procs = num_gpus*node_counts["inference"]

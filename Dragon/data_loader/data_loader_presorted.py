@@ -6,15 +6,16 @@ import argparse
 import os
 import sys
 import random
+import logging
 
 import dragon
 import multiprocessing as mp
 from dragon.data.ddict import DDict
 from dragon.native.machine import current, System
 import traceback
-
 from functools import partial
 
+from logging_config import load_logger as logger
 
 def get_files(base_p: pathlib.PosixPath) -> Tuple[list, int]:
     """Return the file paths
@@ -150,12 +151,12 @@ def load_inference_data(_dict: DDict,
     # Get list of files to read
     base_path = pathlib.Path(data_path)
     files, num_files_in_dir = get_files(base_path)
-    print(f"{num_files_in_dir=}", flush=True)
+    logger.info(f"{num_files_in_dir=}")
     if num_files is None:
         num_files = num_files_in_dir
     else:
         files = files[0:num_files]
-    print(f"Number of files to read is {num_files}", flush=True)
+    logger.info(f"Number of files to read is {num_files}")
 
     # alloc = System()
     # num_nodes = int(alloc.nnodes)
@@ -173,7 +174,7 @@ def load_inference_data(_dict: DDict,
     file_tuples = [(i, f, i % num_managers) for i, f in enumerate(files)]
 
     num_procs = min(max_procs, num_files)
-    print(f"Number of pool procs is {num_procs}", flush=True)
+    logger.info(f"Number of pool procs is {num_procs}")
     
     total_data_size = 0
     for i in range(4):
@@ -181,11 +182,11 @@ def load_inference_data(_dict: DDict,
 
         num_pool_procs = num_procs
         pool = mp.Pool(num_pool_procs, initializer=initialize_worker, initargs=(_dict,))
-        print(f"Pool initialized", flush=True)
-        print(f"Reading smiles for {num_files}", flush=True)
+        logger.info(f"Pool initialized")
+        logger.info(f"Reading smiles for {num_files}")
 
         num_files_per_pool = num_files // 4 + 1
-        print(f"{num_pool_procs=} {num_files_per_pool=}")
+        logger.info(f"{num_pool_procs=} {num_files_per_pool=}")
         smiles_sizes = pool.imap_unordered(
             read_smiles,
             file_tuples[
@@ -194,14 +195,14 @@ def load_inference_data(_dict: DDict,
             ],
         )
         iter_data_size = sum(smiles_sizes)/(1024.*1024.*1024.)
-        print(f"Size of dataset is {iter_data_size} GB", flush=True)
+        logger.info(f"Size of dataset is {iter_data_size} GB")
         total_data_size += iter_data_size
-        print(f"Mapped function complete", flush=True)
+        logger.info(f"Mapped function complete")
         pool.close()
-        print(f"Pool closed", flush=True)
+        logger.info(f"Pool closed")
         pool.join()
-        print(f"Pool joined", flush=True)
-    print(f"Total data read in {total_data_size} GB", flush=True)
+        logger.info(f"Pool joined")
+    logger.info(f"Total data read in {total_data_size} GB")
     
 
 if __name__ == "__main__":

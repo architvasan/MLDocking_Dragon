@@ -1,6 +1,6 @@
 import os
 import logging
-from time import perf_counter
+from time import perf_counter, sleep
 import argparse
 from typing import List
 import random
@@ -21,10 +21,8 @@ from training.launch_training import launch_training
 from data_loader.data_loader_presorted import get_files
 from data_loader.model_loader import load_pretrained_model
 from driver_functions import max_data_dict_size, output_sims
+from logging_config import driver_logger as logger
 
-logger = logging.getLogger("__name__")
-logging.basicConfig(filename="driver.log", encoding='utf-8', level=logging.INFO,
-                    format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
 
 if __name__ == "__main__":
 
@@ -55,16 +53,10 @@ if __name__ == "__main__":
 
     mp.set_start_method("dragon")
 
-    with open("driver_times.log", "w") as f:
-        f.write(f"# {args.data_path}\n")
-
     # Get information about the allocation
     alloc = System()
     num_tot_nodes = int(alloc.nnodes)
     tot_nodelist = alloc.nodes
-
-    with open("driver_times.log", "a") as f:
-        f.write(f"# {num_tot_nodes=}\n")
 
     tot_mem = args.mem_per_node * num_tot_nodes
 
@@ -133,7 +125,6 @@ if __name__ == "__main__":
     model_list_dd = DDict(args.managers_per_node, num_tot_nodes, model_list_dict_mem, working_set_size=10, wait_for_keys=True)
     logger.info(f"Launched Dragon Dictionary for model list with total memory size {model_list_dict_mem} on {num_tot_nodes} nodes")
 
-
     # Load data into the data dictionary
     max_procs = args.max_procs_per_node * num_tot_nodes
     logger.info("Loading inference data into Dragon Dictionary ...")
@@ -170,13 +161,10 @@ if __name__ == "__main__":
         raise Exception(f"Data loading failed with exception {loader_proc.exitcode}")
 
     # Update driver log
-    with open("driver_times.log", "a") as f:
-        f.write(f"# {load_time=}\n")
+    logger.info(f"# {load_time=}")
     num_keys = len(data_dd.keys())
-    with open("driver_times.log", "a") as f:
-        f.write(f"# {num_keys=}\n")
-    with open("driver_times.log", "a") as f:
-        f.write(f"# {num_files=}\n")
+    logger.info(f"# {num_keys=}")
+    logger.info(f"# {num_files=}")
     
     
     # Number of top candidates to produce
@@ -200,13 +188,8 @@ if __name__ == "__main__":
     # sychronization barrier for inference processes and training
     num_procs = num_gpus*node_counts["inference"]
     barrier = mp.Barrier(parties=num_procs + 1) 
-   
-    with open("driver_times.log", "a") as f:
-        f.write(f"# iter  infer_time  sort_time  dock_time  train_time \n")
 
-    iter_start = perf_counter()
-
-    logger.info(f"Current checkpoint: {model_list_dd.current_checkpoint_id}")
+    logger.info(f"Current checkpoint: {model_list_dd.checkpoint_id}")
 
     # Launch the data inference component
     
@@ -288,7 +271,35 @@ if __name__ == "__main__":
     )
     train_proc.start()
 
+    # Monitor processes
+    all_procs = [inf_proc, sorter_proc, dock_proc, train_proc]
+    all_exitcodes = [proc.exitcode for proc in all_procs]
+    all_procs_alive = True
+    while all_procs_alive:
+        for proc in all_procs:
+            if not proc.is_alive():
+                all_procs_alive = False
+                logger.info(f"Process {proc.name} has exited with code {proc.exitcode}")
+                break
+        sleep(5)
+    
+    # Check if all processes exited successfully
+    sleep(10)  # Give processes time to finish logging
+    error_on_exit = False
+    for proc in all_procs:
+        if proc.exitcode != 0:
+            error_on_exit = True
+            logger.error(f"Process {proc.name} exited with code {proc.exitcode}")
 
+    # If any process exited with an error code, raise an exception
+    if error_on_exit:
+        for proc in all_procs:
+            proc.terminate()
+        raise Exception("One or more processes exited with an error code")
+    else:
+        logger.info("All processes completed successfully")
+
+    # If all proceesses completed successfully, join them
     train_proc.join()
     dock_proc.join()
     sorter_proc.join()

@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Union
 from dragon.data.ddict.ddict import DDict
@@ -5,7 +6,9 @@ from training.ST_funcs.smiles_regress_transformer_funcs import ModelArchitecture
 
 driver_path = os.getenv("DRIVER_PATH")
 
-def save_model_weights(dd: Union[DDict, dict], model, verbose = False):
+from logging_config import load_logger as logger
+
+def save_model_weights(dd: Union[DDict, dict], model, checkpoint=False):
 
     weights_dict = {}
     num_layers = 0
@@ -20,61 +23,69 @@ def save_model_weights(dd: Union[DDict, dict], model, verbose = False):
             # Save the weight in the dictionary
             weights_dict[wkey] = weight
             #dd[wkey] = weight
-            if verbose:
-                print(f"{wkey}: {weight.nbytes} bytes")
+            logger.debug(f"{wkey}: {weight.nbytes} bytes")
             tot_memory += weight.nbytes
     
-    print(f"model weights: {num_layers=} {num_weights=} {tot_memory=}")
+    logger.debug(f"model weights: {num_layers=} {num_weights=} {tot_memory=}")
 
     # Checkpoint here?
-    #dd.checkpoint()
+    if checkpoint:
+        dd.checkpoint()
 
     # Future version will use broadcast put to send model to every manager
     dd.bput('model', weights_dict)
 
-    print(f"Saved model to dictionary", flush=True)
+    logger.info(f"Saved model to dictionary on iter {dd.checkpoint_id}")
 
-def retrieve_model_from_dict(dd: Union[DDict, dict]):
+def retrieve_model_from_dict(dd: Union[DDict, dict], checkpoint=False, retrieve_hyper_params=True):
+ 
+    logger.info("Retrieving model from dictionary")
+    if checkpoint:
+        logger.info("Checkpointing model dictionary")
+        dd.checkpoint()
 
-    #weights_dict = dd["model"]
-    #model_iter = dd["model_iter"]
-    #hyper_params = dd["model_hyper_params"]
+    
+    model_iter = dd.checkpoint_id
+    logger.info(f"Loading model weights from dictionary with checkpoint_id: {model_iter}")
+    logger.info(f"{list(dd.keys())=}")
 
     weights_dict = dd.bget('model')
-    hyper_params = dd.bget("model_hyper_params")
+    if retrieve_hyper_params:
+        hyper_params = dd["model_hyper_params"]
+    else:
+        hyper_params = None
 
-    try:
-        model = ModelArchitecture(hyper_params).call()
-    except Exception as e:
-        print(f"Exception {e} raised in calling model")
+    logger.info(f"Loaded {len(weights_dict)} weights from dictionary")
 
+    model = ModelArchitecture(hyper_params).call()
+    
     # Assign the weights back to the model
     for layer_idx, layer in enumerate(model.layers):
         weights = [weights_dict[f'model_layer_{layer_idx}_weight_{weight_idx}'] 
                     for weight_idx in range(len(layer.get_weights()))]
         layer.set_weights(weights)
 
-    print(f"Finished loading model from dictionary\n")
+    logger.info(f"Finished loading model from dictionary")
     return model, hyper_params
 
 def load_pretrained_model(dd: Union[DDict, dict]):
 
-    print("Loading pretrained model")
+    logger.info("Loading pretrained model")
     # Read HyperParameters
     json_file = os.path.join(driver_path, "inference/config.json")
     hyper_params = ParamsJson(json_file)
 
-    dd.bput('model_hyper_params', hyper_params)
+    dd.pput('model_hyper_params', hyper_params)
     #dd['model_hyper_params'] = hyper_params
 
-    print(f"Loaded hyper params: {hyper_params}", flush=True)
+    logger.debug(f"Loaded hyper params: {hyper_params}")
     # Load model and weights
     model = ModelArchitecture(hyper_params).call()
     model.load_weights(os.path.join(driver_path,"inference/smile_regress.autosave.model.h5"))
-    print(f"Loaded pretrained model weights from disk", flush=True)
-    save_model_weights(dd, model, verbose=True)
+    logger.info(f"Loaded pretrained model weights from disk")
+    save_model_weights(dd, model)
 
-    print(f"Loaded pretrained model into dictionary", flush=True)
+    logger.info(f"Loaded pretrained model into dictionary")
 
 if __name__ == "__main__":
     dd = {}

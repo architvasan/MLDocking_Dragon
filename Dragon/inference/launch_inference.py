@@ -1,4 +1,5 @@
 import os
+import logging
 
 import dragon
 import multiprocessing as mp
@@ -12,30 +13,22 @@ import os
 import sys
 
 from inference.utils_transformer import ParamsJson, ModelArchitecture, pad
-
+from logging_config import inf_logger as logger
 from .run_inference import infer
 
 driver_path = os.getenv("DRIVER_PATH")
 
+#logger = setup_logger('inf', "inference.log", level=logging.INFO)
+#logger = logging.getLogger('inference')
+#logger.propagate = False  # Prevent logging from propagating to the root logger
 
-def load_pretrained_model(dd: DDict):
-    # Read HyperParameters
-    json_file = driver_path + "inference/config.json"
-    hyper_params = ParamsJson(json_file)
+#logger = logging.getLogger(__name__)
 
-    # Load model and weights
-    try:
-        # with open(f"pretrained_model.log","w") as sys.stdout:
-        model = ModelArchitecture(hyper_params).call()
-        model.load_weights(driver_path + f"inference/smile_regress.autosave.model.h5")
-        print(f"{model=}", flush=True)
-        dd["model"] = model
-        dd["model_iter"] = 0
-    except Exception as e:
-        # eprint(e, flush=True)
-        with open(f"pretrained_model.log", "a") as f:
-            f.write(f"{e}")
-
+# logger = logging.getLogger('inference')
+# handler = logging.StreamHandler()
+# handler.setFormatter(logging.Formatter('INFERENCE %(levelname)s: %(asctime)s: %(message)s', 
+#                                         datefmt='%m-%d-%Y %I:%M:%S %p'))
+# logger.addHandler(handler)
 
 def launch_inference(data_dd: DDict, 
                     model_list_dd: DDict, 
@@ -53,6 +46,9 @@ def launch_inference(data_dd: DDict,
     :param num_procs: number of processes to use for inference
     :type num_procs: int
     """
+
+    #logger = setup_logger('inf', "inference.log", level=logging.INFO)
+    
     num_inf_nodes = len(nodelist)
 
     gpu_devices_string = os.getenv("GPU_DEVICES")
@@ -83,13 +79,13 @@ def launch_inference(data_dd: DDict,
         inf_cpu_bind.append(bind_threads)
 
     run_dir = os.getcwd()
-    print(f"{inf_cpu_bind=}")
-    print(f"{inf_gpu_bind=}")
+    logger.info(f"{inf_cpu_bind=}")
+    logger.info(f"{inf_gpu_bind=}")
     if len(inf_cpu_bind) != len(inf_gpu_bind):
         raise (Exception("Number of cpu bindings does not match the number of gpus"))
 
     # Get checkpoint id
-    checkpoint_id = model_list_dd.current_checkpoint_id
+    checkpoint_id = model_list_dd.checkpoint_id
 
     #bar = mp.Barrier(parties=num_inf_nodes * num_procs_pn)
 
@@ -128,8 +124,8 @@ def launch_inference(data_dd: DDict,
     # Launch the ProcessGroup 
 
     grp.init()
-    print(f"Starting Process Group for Inference", flush=True)
+    logger.info(f"Starting Process Group for Inference")
     grp.start()
     grp.join()
-    print(f"Joined Process Group for Inference", flush=True)
+    logger.info(f"Joined Process Group for Inference")
     grp.close()

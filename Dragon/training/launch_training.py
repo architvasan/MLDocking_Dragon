@@ -1,6 +1,6 @@
 import os
-
 import dragon
+import logging
 import multiprocessing as mp
 from dragon.native.process_group import ProcessGroup
 from dragon.native.process import Process, ProcessTemplate, MSG_PIPE, MSG_DEVNULL
@@ -8,6 +8,7 @@ from dragon.infrastructure.connection import Connection
 from dragon.data.ddict.ddict import DDict
 from dragon.infrastructure.policy import Policy
 from dragon.native.machine import Node
+from logging_config import train_logger as logger
 
 from .smiles_regress_transformer_run import fine_tune
 
@@ -27,6 +28,8 @@ def launch_training(model_list_dd: DDict,
     :param num_procs: number of processes to use for inference
     :type num_procs: int
     """
+    #logger = setup_logger('train', "training.log", level=logging.INFO)
+
     run_dir = os.getcwd()
 
     # Create the process group
@@ -64,6 +67,8 @@ def launch_training(model_list_dd: DDict,
 
     # Bind the training to the first gpu on the assigned node
 
+    logger.info(f"Training on node {node_name}")
+    logger.info(f"Training bound to cpu cores {inf_cpu_bind[0]} and gpu {inf_gpu_bind[0]}")
     local_policy = Policy(placement=Policy.Placement.HOST_NAME, 
                           host_name=node_name, 
                           cpu_affinity=inf_cpu_bind[0], 
@@ -84,11 +89,11 @@ def launch_training(model_list_dd: DDict,
     # Launch the ProcessGroup 
     grp.init()
     grp.start()
-    print(f"Starting Process Group for Training")
+    logger.info(f"Starting Process Group for Training")
     
     grp.join()
     grp.close()
-    print(f"Training process group stopped",flush=True)
+    logger.info(f"Training process group stopped",flush=True)
     #print(dd["model_iter"])
     #print(dd["model"])
 

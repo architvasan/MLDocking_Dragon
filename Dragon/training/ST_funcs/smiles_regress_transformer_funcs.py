@@ -30,6 +30,7 @@ from tensorflow.keras.preprocessing import sequence, text
 from .clr_callback import *
 from tensorflow.python.client import device_lib
 from itertools import chain, repeat, islice
+from logging_config import train_logger as logger
 
 driver_path = os.getenv("DRIVER_PATH")
 
@@ -196,17 +197,16 @@ def assemble_docking_data_top(candidate_dict):
     for sm in top_smiles:
         if sm not in ckeys:
             num_skipped += 1
-            with open("training.log", "a") as f:
-                f.write(f"Could not find top candidate in keys: {sm}\n")
+            logger.info(f"Could not find top candidate in keys: {sm}")
             continue
         val = candidate_dict[sm]
         sc = float(val["dock_score"])
         if sc > 0:
             train_smiles.append(sm)
             train_scores.append(sc)
-    print(f"Retrieved {len(train_smiles)} out of {len(top_smiles)} candidates for training",flush=True)
-    print(f"Missing {num_skipped} candidates from dictionary",flush=True)
-    print(f"Zero results for {len(top_smiles) - num_skipped - len(train_smiles)} candidates",flush=True) 
+    logger.info(f"Retrieved {len(train_smiles)} out of {len(top_smiles)} candidates for training")
+    logger.info(f"Missing {num_skipped} candidates from dictionary")
+    logger.info(f"Zero results for {len(top_smiles) - num_skipped - len(train_smiles)} candidates") 
     return train_smiles, train_scores
     
 
@@ -214,6 +214,9 @@ def assemble_docking_data_top(candidate_dict):
 def train_val_data(candidate_dict,fine_tuned=False,validation_fraction=0.2):
   
     train_smiles, train_scores = assemble_docking_data_top(candidate_dict)
+    if len(train_smiles) == 0:
+        logger.info("No training data available, returning empty lists")
+        return [], [], [], []   
     train_data = list(zip(train_smiles,train_scores))
     random.shuffle(train_data)
     train_smiles,train_scores = zip(*train_data)
@@ -266,7 +269,7 @@ def train_val_data(candidate_dict,fine_tuned=False,validation_fraction=0.2):
         
         return x_train, y_train, x_val, y_val
     else:
-        return [],[]
+        return [], [], [], []
   
 
 def get_available_gpus():
