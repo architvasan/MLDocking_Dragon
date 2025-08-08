@@ -187,7 +187,7 @@ if __name__ == "__main__":
 
     # sychronization barrier for inference processes and training
     num_procs = num_gpus*node_counts["inference"]
-    barrier = mp.Barrier(parties=num_procs + 1) 
+    barrier = mp.Barrier(parties=num_procs) # num_procs -1 for inference + 1 for training = num_procs
 
     logger.info(f"Current checkpoint: {model_list_dd.checkpoint_id}")
 
@@ -216,7 +216,6 @@ if __name__ == "__main__":
     )
     inf_proc.start()
     
-
     # Launch data sorter component
     logger.info(f"Launching sorting ...")
 
@@ -233,7 +232,6 @@ if __name__ == "__main__":
                                     ),
                                 )
     sorter_proc.start()
-
 
 #     # Launch Docking Simulations
     logger.info(f"Launched Docking Simulations")
@@ -287,7 +285,7 @@ if __name__ == "__main__":
     sleep(10)  # Give processes time to finish logging
     error_on_exit = False
     for proc in all_procs:
-        if proc.exitcode != 0:
+        if proc.exitcode != 0 and proc.exitcode is not None:
             error_on_exit = True
             logger.error(f"Process {proc.name} exited with code {proc.exitcode}")
 

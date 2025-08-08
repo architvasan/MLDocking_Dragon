@@ -157,6 +157,9 @@ def sort_controller(
             time.sleep(checkpoint_interval_min * 60)
 
         logger.info(f"Starting iter {iter}")
+
+        model_list_dd.sync_to_newest_checkpoint()
+        logger.info(f"Model list dictionary synced to newest checkpoint id {model_list_dd.checkpoint_id}")
         tic = perf_counter()
 
         random_number = int(random_number_fraction*top_candidate_number)

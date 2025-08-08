@@ -37,27 +37,26 @@ def save_model_weights(dd: Union[DDict, dict], model, checkpoint=False):
 
     logger.info(f"Saved model to dictionary on iter {dd.checkpoint_id}")
 
-def retrieve_model_from_dict(dd: Union[DDict, dict], checkpoint=False, retrieve_hyper_params=True):
+def retrieve_model_from_dict(dd: Union[DDict, dict], checkpoint=False, hyper_params=None):
  
-    logger.info("Retrieving model from dictionary")
+    logger.debug("Retrieving model from dictionary")
     if checkpoint:
-        logger.info("Checkpointing model dictionary")
+        logger.debug("Checkpointing model dictionary")
         dd.checkpoint()
 
-    
     model_iter = dd.checkpoint_id
-    logger.info(f"Loading model weights from dictionary with checkpoint_id: {model_iter}")
+    logger.debug(f"Loading model weights from dictionary with checkpoint_id: {model_iter}")
     logger.info(f"{list(dd.keys())=}")
 
     weights_dict = dd.bget('model')
-    if retrieve_hyper_params:
+    if hyper_params is None:
         hyper_params = dd["model_hyper_params"]
-    else:
-        hyper_params = None
 
-    logger.info(f"Loaded {len(weights_dict)} weights from dictionary")
+    logger.debug(f"Loaded {len(weights_dict)} weights from dictionary")
 
     model = ModelArchitecture(hyper_params).call()
+
+    logger.debug(f"Called model")
     
     # Assign the weights back to the model
     for layer_idx, layer in enumerate(model.layers):
@@ -76,9 +75,8 @@ def load_pretrained_model(dd: Union[DDict, dict]):
     hyper_params = ParamsJson(json_file)
 
     dd.pput('model_hyper_params', hyper_params)
-    #dd['model_hyper_params'] = hyper_params
+    logger.info(f"Loaded hyper params: {hyper_params}")
 
-    logger.debug(f"Loaded hyper params: {hyper_params}")
     # Load model and weights
     model = ModelArchitecture(hyper_params).call()
     model.load_weights(os.path.join(driver_path,"inference/smile_regress.autosave.model.h5"))

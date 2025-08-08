@@ -359,6 +359,7 @@ def run_docking(sim_dd,
     sim_iter = 0
 
     while continue_simulations(continue_event, sim_iter):
+        logger.info(f"{sim_iter=} Docking worker {proc} checking for candidates to simulate...")
         if "current_sort_list" in model_list_dd.keys():
             top_candidates = model_list_dd.bget("current_sort_list")
         else:
@@ -368,14 +369,14 @@ def run_docking(sim_dd,
             time.sleep(list_poll_interval_sec)
         else:
             top_candidates_list = list(zip(top_candidates['smiles'], top_candidates['inf'], top_candidates['model_iter']))
-            if proc == 1: 
-                logger.info(f"Sorted list has {len(top_candidates_list)} candidates")
+           
+            logger.info(f"Sorted list has {len(top_candidates_list)} candidates")
             
             # add random samples to sorted candidates if available
             if "random_compound_sample" in ckeys:
                 random_candidates = model_list_dd['random_compound_sample']
                 random_candidates_list = list(zip(random_candidates['smiles'],random_candidates['inf'],random_candidates['model_iter']))
-                if proc == 1: logger.info(f"Random candidate list has {len(random_candidates_list)} candidates")
+                logger.info(f"Random candidate list has {len(random_candidates_list)} candidates")
                 top_candidates_list += random_candidates_list
                                     
             top_candidates_dict = {}
@@ -391,16 +392,14 @@ def run_docking(sim_dd,
             simulated_compounds = model_list_dd.bget("simulated_compounds")
 
             # Remove top candidates that have already been simulated
-            if proc == 1:
-                logger.info(f"Found {len(top_candidates_smiles)} top candidates; there are {len(ckeys)} ckeys")
+            logger.info(f"Found {len(top_candidates_smiles)} top candidates; there are {len(ckeys)} ckeys")
 
             # Remove only candidates in previous list and not ckeys because other workers may have already updated cdd
             top_candidates_smiles = list(set(top_candidates_smiles) - set(simulated_compounds))
             top_candidates_smiles.sort()
             num_candidates = len(top_candidates_smiles)
 
-            if proc == 1:
-                logger.info(f"Found {num_candidates} candidates not in previous list")
+            logger.info(f"Found {num_candidates} candidates not in previous list")
                 
 
             # Partition top candidate list to get candidates for this process to simulate

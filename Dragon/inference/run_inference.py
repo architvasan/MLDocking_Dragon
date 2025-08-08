@@ -200,7 +200,8 @@ def infer(data_dd,
     logger.info(f"worker {proc} processing {num_run} keys")
     reanalysis_iter = 0
     
-    model,hyper_params = retrieve_model_from_dict(model_list_dd, checkpoint=False)
+    model,hyper_params = retrieve_model_from_dict(model_list_dd, 
+                                                    checkpoint=False)
     model_iter = model_list_dd.checkpoint_id
     BATCH = hyper_params["general"]["batch_size"]
 
@@ -226,8 +227,9 @@ def infer(data_dd,
                 worker_logger.debug(f"{model_list_dd.checkpoint_id=}")
 
                 # Retrieve model from dictionary
-                model,_ = retrieve_model_from_dict(model_list_dd, checkpoint=True, 
-                                                                retrieve_hyper_params=False)
+                model,_ = retrieve_model_from_dict(model_list_dd, 
+                                                    checkpoint=True, 
+                                                    hyper_params=hyper_params)
                 model_iter = model_list_dd.checkpoint_id
                 
                 worker_logger.debug(f"Loaded model from checkpoint {model_iter}")
