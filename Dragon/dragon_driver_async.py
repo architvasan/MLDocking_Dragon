@@ -80,54 +80,34 @@ if __name__ == "__main__":
     nodelists = {}
     offset = 0
     for key in node_counts.keys():
-        nodelists[key] = tot_nodelist[: node_counts[key]]
+        nodelists[key] = tot_nodelist[offset:offset+node_counts[key]]
+        offset += node_counts[key]
+    
+    print(f"{nodelists=}")
 
-    # Set the number of nodes the dictionary uses
-    num_dict_nodes = num_tot_nodes
+    # Set up and launch the inference DDict
+    # inf_dd_nodelist = tot_nodelist[:args.inf_dd_nodes]
+    # inf_dd_mem_size = args.mem_per_node*args.inf_dd_nodes
+    # inf_dd_mem_size *= (1024*1024*1024)
+    data_dict_mem = int(args.data_dictionary_mem_fraction*tot_mem)
+    candidate_dict_mem = tot_mem - data_dict_mem
+    data_dict_mem *= (1024*1024*1024)
+    candidate_dict_mem *= (1024*1024*1024)
 
-    # Get info on the number of files
-    base_path = pathlib.Path(args.data_path)
-    files, num_files = get_files(base_path)
-    num_files = 128
-
-    tot_mem = args.mem_per_node*num_tot_nodes
-    logger.info(f"There are {num_files} files")
-
-    # There are 3 dictionaries:
-    # 1. data dictionary for inference
-    # 2. simulation dictionary for docking simulation results
-    # 3. model and candidate dictionary for training
-    # The model and candidate dictionary will be checkpointed
-
-
-    # Set up and launch the inference data DDict and top candidate DDict
-    # Calculate memory allocation for each dictionary
-    data_dict_mem, sim_dict_mem, model_list_dict_mem = max_data_dict_size(num_files, max_pool_frac=0.5)
-    logger.info(f"Setting data_dict size to {data_dict_mem} GB")
-    logger.info(f"Setting sim_dict size to {sim_dict_mem} GB")
-    logger.info(f"Setting model_list_dict size to {model_list_dict_mem} GB")
-
-    # Check if total memory required exceeds available memory
-    if data_dict_mem + sim_dict_mem + model_list_dict_mem > tot_mem:
-        logger.info(f"Sum of dictionary sizes exceed total mem: {data_dict_mem=} {sim_dict_mem=} {model_list_dict_mem=} {tot_mem=}")
-        raise Exception("Not enough memory for DDicts")
-
-    # Convert memory sizes to bytes
-    data_dict_mem *= (1024 * 1024 * 1024)
-    sim_dict_mem *= (1024 * 1024 * 1024)
-    model_list_dict_mem *= (1024 * 1024 * 1024)
-
-    # Initialize Dragon Dictionaries for inference, docking simulation, and model list
-    data_dd = DDict(args.managers_per_node, num_tot_nodes, data_dict_mem)
-    logger.info(f"Launched Dragon Dictionary for inference with total memory size {data_dict_mem} on {num_tot_nodes} nodes")
-    sim_dd = DDict(args.managers_per_node, num_tot_nodes, sim_dict_mem)
-    logger.info(f"Launched Dragon Dictionary for docking simulation with total memory size {sim_dict_mem} on {num_tot_nodes} nodes")
-    model_list_dd = DDict(args.managers_per_node, num_tot_nodes, model_list_dict_mem, working_set_size=10, wait_for_keys=True)
-    logger.info(f"Launched Dragon Dictionary for model list with total memory size {model_list_dict_mem} on {num_tot_nodes} nodes")
-
-    # Load data into the data dictionary
-    max_procs = args.max_procs_per_node * num_tot_nodes
-    logger.info("Loading inference data into Dragon Dictionary ...")
+    # Start distributed dictionary used for inference
+    #inf_dd_policy = Policy(placement=Policy.Placement.HOST_NAME, host_name=Node(inf_dd_nodelist).hostname)
+    # Note: the host name based policy, as far as I can tell, only takes in a single node, not a list
+    #       so at the moment we can't specify to the inf_dd to run on a list of nodes.
+    #       But by setting inf_dd_nodes < num_tot_nodes, we can make it run on the first inf_dd_nodes nodes only
+    dict_timeout = 200
+    data_dd = DDict(args.managers_per_node, num_tot_nodes, data_dict_mem, 
+                   timeout=args.dictionary_timeout, num_streams_per_manager=args.channels_per_manager)
+    print(f"Launched Dragon Dictionary for inference with total memory size {data_dict_mem}", flush=True)
+    print(f"on {num_tot_nodes} nodes", flush=True)
+    
+    # Launch the data loader component
+    max_procs = args.max_procs_per_node*num_tot_nodes
+    print("Loading inference data into Dragon Dictionary ...", flush=True)
     tic = perf_counter()
     loader_proc = mp.Process(
         target=load_inference_data,

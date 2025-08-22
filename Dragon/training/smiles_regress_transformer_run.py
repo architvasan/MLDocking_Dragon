@@ -12,10 +12,11 @@
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.preprocessing import sequence, text
 import logging
-from .ST_funcs.smiles_regress_transformer_funcs import train_val_data
+from .ST_funcs.smiles_regress_transformer_funcs import train_val_data, assemble_callbacks
 from data_loader.model_loader import retrieve_model_from_dict, save_model_weights
 import sys
 import os
+from time import perf_counter
 import time
 
 import dragon
@@ -42,7 +43,8 @@ def fine_tune(model_list_dd: DDict,
                 save_model=True,
                 list_poll_interval_sec=60):
 
-    fine_tune_log = "training.log"
+    fine_tune_log = f"training_{iter}.log"
+    tic_start = perf_counter()
 
     prev_top_candidates = []
     training_iter = 0
@@ -72,14 +74,17 @@ def fine_tune(model_list_dd: DDict,
             model, hyper_params = retrieve_model_from_dict(model_list_dd,)
             model_iter = model_list_dd.checkpoint_id
 
-            for layer in model.layers:
-                if layer.name not in ['dropout_3', 'dense_3', 'dropout_4', 'dense_4', 'dropout_5', 'dense_5', 'dropout_6', 'dense_6']:
-                    layer.trainable = False
+            #for layer in model.layers:
+            #    if layer.name not in ['dropout_3', 'dense_3', 'dropout_4', 'dense_4', 'dropout_5', 'dense_5', 'dropout_6', 'dense_6']:
+            #        layer.trainable = False
 
             logger.info(f"Create training data")
             ########Create training and validation data##### 
-            x_train, y_train, x_val, y_val = train_val_data(sim_dd)
+            x_train, y_train, x_val, y_val = train_val_data(sim_dd, method="stratified")
             logger.info(f"Finished creating training data")
+
+            ######## Create callbacks #######
+            callbacks = assemble_callbacks(hyper_params)
             
             # Only train if there is new data
             if len(x_train) > 0:
@@ -93,7 +98,7 @@ def fine_tune(model_list_dd: DDict,
                                 epochs=EPOCH,
                                 verbose=2,
                                 validation_data=(x_val,y_val),
-                                #callbacks=callbacks,
+                                callbacks=callbacks,
                             )
                     print("model fitting complete")
                 sys.stdout = sys.__stdout__

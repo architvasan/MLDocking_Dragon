@@ -1,5 +1,6 @@
 import os
 import logging
+from time import perf_counter
 
 import dragon
 import multiprocessing as mp
@@ -9,8 +10,6 @@ from dragon.infrastructure.connection import Connection
 from dragon.data.ddict import DDict
 from dragon.infrastructure.policy import Policy
 from dragon.native.machine import Node
-import os
-import sys
 
 from inference.utils_transformer import ParamsJson, ModelArchitecture, pad
 from logging_config import inf_logger as logger
@@ -18,17 +17,6 @@ from .run_inference import infer
 
 driver_path = os.getenv("DRIVER_PATH")
 
-#logger = setup_logger('inf', "inference.log", level=logging.INFO)
-#logger = logging.getLogger('inference')
-#logger.propagate = False  # Prevent logging from propagating to the root logger
-
-#logger = logging.getLogger(__name__)
-
-# logger = logging.getLogger('inference')
-# handler = logging.StreamHandler()
-# handler.setFormatter(logging.Formatter('INFERENCE %(levelname)s: %(asctime)s: %(message)s', 
-#                                         datefmt='%m-%d-%Y %I:%M:%S %p'))
-# logger.addHandler(handler)
 
 def launch_inference(data_dd: DDict, 
                     model_list_dd: DDict, 
@@ -51,20 +39,27 @@ def launch_inference(data_dd: DDict,
     
     num_inf_nodes = len(nodelist)
 
-    gpu_devices_string = os.getenv("GPU_DEVICES")
+    num_ccs = 1
+    if int(os.environ.get('USE_CCS', '0')) == 1:
+        ccs_string = os.getenv("ZEX_NUMBER_OF_CCS")
+        num_ccs = int(ccs_string.split(",")[0].split(":")[1])
+        print(f"Using {num_ccs} CCS on Aurora PVC",flush=True)
 
+    gpu_devices_string = os.getenv("GPU_DEVICES")
     inf_gpu_bind = []
     for g in gpu_devices_string.split(","):
-        if "." in g:
-            inf_gpu_bind.append([float(g)])
-        else:
-            inf_gpu_bind.append([int(g)])
+        for _ in range(num_ccs):
+            if "." in g:
+                inf_gpu_bind.append([float(g)])
+            else:
+                inf_gpu_bind.append([int(g)])
     num_procs_pn = len(inf_gpu_bind)  # number of procs per node is number of gpus
+    print(f"Inference running on {num_inf_nodes} nodes and {num_procs_pn} processes per node", flush=True)
 
-    cpu_affinity_string = os.getenv("CPU_AFFINITY")
+    cpu_affinity_string = os.getenv("INF_CPU_AFFINITY")
     cpu_ranges = cpu_affinity_string.split(":")
     inf_cpu_bind = []
-    for cr in cpu_ranges[1:]:
+    for cr in cpu_ranges:
         bind_threads = []
         thread_ranges = cr.split(",")
         for tr in thread_ranges:
@@ -90,6 +85,7 @@ def launch_inference(data_dd: DDict,
     #bar = mp.Barrier(parties=num_inf_nodes * num_procs_pn)
 
     # Create the process group
+    tic = perf_counter()
     global_policy = Policy(distribution=Policy.Distribution.BLOCK)
     grp = ProcessGroup(policy=global_policy)
     for node_num in range(num_inf_nodes):
@@ -109,6 +105,7 @@ def launch_inference(data_dd: DDict,
                             template=ProcessTemplate(target=infer, 
                                                      args=(data_dd,
                                                         model_list_dd,
+                                                        iter,
                                                         num_procs_pn,
                                                         proc_id, 
                                                         continue_event, # Continue event not used in sequential wf
@@ -122,10 +119,12 @@ def launch_inference(data_dd: DDict,
                                                      policy=local_policy,))
     
     # Launch the ProcessGroup 
-
+    print(f"Starting Process Group for inference", flush=True)
     grp.init()
     logger.info(f"Starting Process Group for Inference")
     grp.start()
     grp.join()
     logger.info(f"Joined Process Group for Inference")
     grp.close()
+    toc = perf_counter()
+    print(f"Performed inference in {toc-tic} seconds", flush=True)

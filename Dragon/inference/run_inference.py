@@ -25,18 +25,9 @@ import tensorflow as tf
 tf.get_logger().setLevel('ERROR')
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
-# tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
 driver_path = os.getenv("DRIVER_PATH")
 
-#logger = setup_logger('inf', "inference.log", level=logging.INFO)
-
-#logger = logging.getLogger(__name__)
-# logger = logging.getLogger('inference')
-# handler = logging.StreamHandler()
-# handler.setFormatter(logging.Formatter('INFERENCE %(levelname)s: %(asctime)s: %(message)s', 
-#                                         datefmt='%m-%d-%Y %I:%M:%S %p'))
-# logger.addHandler(handler)
 
 def split_dict_keys(keys: List[str], size: int, proc: int) -> List[str]:
     """Read the keys containing inference data from the Dragon Dictionary
@@ -132,6 +123,7 @@ def infer(data_dd,
           bar=None):
     """Run inference reading from and writing data to the Dragon Dictionary"""
     gc.collect()
+    tic = perf_counter()
     # !!! DEBUG !!!
 
     os.makedirs("inference_worker_logs", exist_ok=True)
@@ -187,8 +179,9 @@ def infer(data_dd,
     vocab_file = driver_path + "inference/VocabFiles/vocab_spe.txt"
     spe_file = driver_path + "inference/VocabFiles/SPE_ChEMBL.txt"
     tokenizer = SMILES_SPE_Tokenizer(vocab_file=vocab_file, spe_file=spe_file)
-    tic = perf_counter()
     num_smiles = 0
+    preproc_time = 0
+    model_time = 0
     dictionary_time = 0
     data_moved_size = 0
     num_run = len(split_keys)
@@ -317,8 +310,11 @@ def infer(data_dd,
         "data_move_time": dictionary_time,
         "data_move_size": data_moved_size,
     }
-    logger.info(f"worker {proc} is all DONE!! :)")
+    logger.info(f"worker {proc} is all DONE in {toc - tic} seconds!! :)")
+    logger.info(f"Performed inference on {num_run} files and {num_smiles} smiles: total={toc - tic}, IO={dictionary_time}, model={model_time}, preprocessing={preproc_time}")
     return metrics
+
+
 ## Run main
 if __name__ == "__main__":
     

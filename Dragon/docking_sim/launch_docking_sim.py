@@ -1,5 +1,7 @@
 import os
 import logging
+from time import perf_counter
+
 import dragon
 import multiprocessing as mp
 from dragon.native.process_group import ProcessGroup
@@ -26,9 +28,8 @@ def launch_docking_sim(sim_dd,
     :param num_procs: number of processes to use for docking
     :type num_procs: int
     """
-    num_nodes = len(nodelist)
-    num_procs_pn = num_procs//num_nodes
     run_dir = os.getcwd()
+    num_nodes = len(nodelist)
 
     skip_threads = os.getenv("SKIP_THREADS")
     if skip_threads:
@@ -77,10 +78,13 @@ def launch_docking_sim(sim_dd,
     
 
     # Create the process group
+    tic = perf_counter()
     global_policy = Policy(distribution=Policy.Distribution.BLOCK)
     grp = ProcessGroup(policy=global_policy)
     for node_num in range(num_nodes):
         node_name = Node(nodelist[node_num]).hostname
+        if node_num == num_nodes-1:
+            num_procs_pn = remainder_procs_pn
         for proc in range(num_procs_pn):
             if proc in skip_threads or proc in inf_cpu_bind:
                 continue
@@ -99,10 +103,12 @@ def launch_docking_sim(sim_dd,
                                                             continue_event,), 
                                                         cwd=run_dir,
                                                         policy=local_policy,
+                                                        stdout=MSG_PIPE
                                                         )
                             )
 
     # Launch the ProcessGroup
+    print(f"Starting Process Group for docking sims", flush=True)
     grp.init()
     grp.start()
     logger.info(f"Starting Process Group for Docking Sims on {num_procs} procs")
@@ -121,5 +127,20 @@ def launch_docking_sim(sim_dd,
     #                                                 k != "random_compound_sample"]
     if barrier is not None:
         model_list_dd.bput('simulated_compounds', list(sim_dd.keys()))
+    tic_write = perf_counter()
+    simulated_compounds = [k for k in sdd.keys() if not k.isdigit() and 
+                                                    k != '-1' and 
+                                                    "iter" not in k and
+                                                    "current" not in k and
+                                                    k != "simulated_compounds" and 
+                                                    k != "random_compound_sample"]
+    sdd.bput('simulated_compounds', simulated_compounds)
+    toc_write = perf_counter()
+    toc = perf_counter()
     
+    run_time = max(run_times)
+    avg_io_time = (toc_write-tic_write) + sum(ddict_times)/len(ddict_times)
+    max_io_time = (toc_write-tic_write) + max(ddict_times)
+    print(f'Performed docking simulation: total={run_time}, IO_avg={avg_io_time}, IO_max={max_io_time}',flush=True)
+    print(f"Performed docking simulations in {toc-tic} seconds", flush=True)    
 

@@ -207,19 +207,21 @@ def get_largest(dd, out_queue, num_return_sorted):
     # reflected in dd (i.e. dd is a manager directed
     # subset of a ddict).
     try:
+        tic = perf_counter()
         keys = dd.keys()
-        keys = [k for k in keys if "model" not in k and "iter" not in k]
+        #keys = [k for k in keys if "model" not in k and "iter" not in k]
         this_value = []
 
         for key in keys:
-            val = dd[key]
-            num_smiles = len(val['inf'])
-            this_value.extend(zip(val["inf"], 
-                                  val["smiles"], 
-                                  [val['model_iter'] for _ in range(num_smiles)]))
-            this_value = heapq.nlargest(
-                num_return_sorted, this_value, key=lambda x: x[0]
-            )
+            if "model" not in key and "iter" not in key:
+                val = dd[key]
+                num_smiles = len(val['inf'])
+                this_value.extend(zip(val["inf"], 
+                                        val["smiles"], 
+                                        [val['model_iter'] for _ in range(num_smiles)]))
+                this_value = heapq.nlargest(
+                    num_return_sorted, this_value, key=lambda x: x[0]
+                )
 
         # If EOFError is raised, the receiving side closed the queue
         try:
@@ -227,6 +229,8 @@ def get_largest(dd, out_queue, num_return_sorted):
                 out_queue.put(this_value[i])
         except EOFError:
             pass
+
+        #print(perf_counter()-tic,flush=True)
 
     except Exception as ex:
         tb = traceback.format_exc()
@@ -241,15 +245,18 @@ def comparator(x, y):
 
 
 def sort_dictionary(dd: DDict, num_return_sorted, cdd: DDict):
-
+    
+    tic_start = perf_counter()
     logger.info(f"Finding the best {num_return_sorted} candidates.")
     candidate_list = []
 
-    with dd.filter(get_largest, (num_return_sorted,), comparator) as candidates:
+    tic_filter = perf_counter()
+    with dd.filter(get_largest, (num_return_sorted,), comparator, branching_factor=4) as candidates:
         for candidate in candidates:
             candidate_list.append(candidate)
             if len(candidate_list) == num_return_sorted:
                 break
+    toc_filter = perf_counter()
 
     logger.info("HERE IS THE CANDIDATE LIST (first 10 only)")
     logger.info("******************************************")
@@ -268,12 +275,48 @@ def sort_dictionary(dd: DDict, num_return_sorted, cdd: DDict):
 
     new_sort_iter = int(current_sort_iter + 1)
     cdd.bput("current_sort_iter", new_sort_iter)
+    tic_w = perf_counter()
     cdd.bput("current_sort_list", sort_val)
+    toc_w = perf_counter()
+    toc_end = perf_counter()
 
     logger.info(f"Finished filter sort")
     #cdd[ckey] = sort_val
     #cdd["sort_iter"] = int(ckey)
     #cdd["max_sort_iter"] = ckey
+
+    io_time =(toc_w-tic_w)
+    filter_time = toc_filter - tic_filter
+
+    print(f"Performed sorting of {num_return_sorted} compounds: total={toc_end-tic_start}, filter={filter_time}, IO={io_time}",flush=True)
+
+    if random_number > 0:
+        print(f"Adding {random_number} random candidates to training", flush=True)
+        num_procs = min(len(nodelist), random_number)
+        random_num_per_proc = max(int(random_number/num_procs), 1)
+        print(f"Starting a pool with {num_procs} processes each adding {random_num_per_proc} random candidates", flush=True)
+        pool = mp.Pool(num_procs, 
+                    initializer=initialize_worker, 
+                    initargs=(dd,), 
+                    )
+        out = pool.imap_unordered(make_random_compound_selection, 
+                                [random_num_per_proc for _ in range(num_procs)])
+
+        random_smiles = []
+        random_inf = []
+        random_model = []
+        for result in out:
+            for r in result:
+                sm,sc,mi = r
+                random_smiles.append(sm)
+                random_inf.append(sc)
+                random_model.append(mi)
+        pool.close()
+        pool.join()
+        print(f"Randomly sampled {len(random_smiles)} random smiles for simulation", flush=True)
+        cdd['random_compound_sample'] = {'smiles': random_smiles,
+                                        'inf': random_inf,
+                                        'model_iter': random_model,}
     
 
 def make_random_compound_selection(random_number):
@@ -282,35 +325,38 @@ def make_random_compound_selection(random_number):
         me = mp.current_process()
         dd = me.stash["ddict"]
 
-        alloc = System()
-        num_tot_nodes = int(alloc.nnodes) 
-        num_random_per_node = max(int(random_number/num_tot_nodes), 1)
+        #alloc = System()
+        #num_tot_nodes = int(alloc.nnodes) 
+        #num_random_per_node = max(int(random_number/num_tot_nodes), 1)
+        num_random_per_node = random_number
+
 
         random_selection = []
 
         # Select num_random_per_node random keys
-        current_host = host_id()
-        manager_nodes = dd.manager_nodes
-        key_list = []
-        for i in range(len(manager_nodes)):
-            if manager_nodes[i].h_uid == current_host:
-                dm = dd.manager(i)
-                key_list.extend(dm.keys())
-                # Filter out keys containing model or iter info
-                key_list = [key for key in key_list if "model" not in key and "iter" not in key]
-       
-        irand = [random.randint(0, len(key_list)-1) for _ in range(num_random_per_node)]
-        
-        for i,k in enumerate(key_list):
-            frequency = irand.count(i)
-            if frequency > 0:
-                val = dd[k]
-                smiles = val['smiles']
-                inf_val = val['inf']
-                model_iter = val['model_iter']
-                for f in range(frequency):
-                    jrand = random.randint(0,len(smiles)-1)
-                    random_selection.append((smiles[jrand],inf_val[jrand], model_iter))
+        #current_host = host_id()
+        #manager_nodes = dd.manager_nodes
+        #key_list = []
+        #for i in range(len(manager_nodes)):
+        #    if manager_nodes[i].h_uid == current_host:
+        #        dm = dd.manager(i)
+        #        key_list.extend(dm.keys())
+        #        # Filter out keys containing model or iter info
+        key_list = dd.local_keys()
+        key_list = [key for key in key_list if "model" not in key and "iter" not in key]
+
+        if len(key_list) > 0:
+            irand = [random.randint(0, len(key_list)-1) for _ in range(num_random_per_node)]
+            for i,k in enumerate(key_list):
+                frequency = irand.count(i)
+                if frequency > 0:
+                    val = dd[k]
+                    smiles = val['smiles']
+                    inf_val = val['inf']
+                    model_iter = val['model_iter']
+                    for f in range(frequency):
+                        jrand = random.randint(0,len(smiles)-1)
+                        random_selection.append((smiles[jrand],inf_val[jrand], model_iter))
     except Exception as e:
         logger.error(f"Pool worker failed with this error {e}")
         raise Exception(e)

@@ -10,6 +10,7 @@ from logging_config import load_logger as logger
 
 def save_model_weights(dd: Union[DDict, dict], model, checkpoint=False):
 
+    # Create dictionary of model weights
     weights_dict = {}
     num_layers = 0
     num_weights = 0
@@ -22,18 +23,17 @@ def save_model_weights(dd: Union[DDict, dict], model, checkpoint=False):
             wkey = f'model_layer_{layer_idx}_weight_{weight_idx}'
             # Save the weight in the dictionary
             weights_dict[wkey] = weight
-            #dd[wkey] = weight
             logger.debug(f"{wkey}: {weight.nbytes} bytes")
             tot_memory += weight.nbytes
     
     logger.debug(f"model weights: {num_layers=} {num_weights=} {tot_memory=}")
 
-    # Checkpoint here?
+    # Checkpoint if requested
     if checkpoint:
         dd.checkpoint()
 
-    # Future version will use broadcast put to send model to every manager
-    dd.bput('model', weights_dict)
+    # Use broadcast put to save model weights on every manager
+    dd.bput(f'model_{iter}', weights_dict)
 
     logger.info(f"Saved model to dictionary on iter {dd.checkpoint_id}")
 
@@ -70,10 +70,12 @@ def retrieve_model_from_dict(dd: Union[DDict, dict], checkpoint=False, hyper_par
 def load_pretrained_model(dd: Union[DDict, dict]):
 
     logger.info("Loading pretrained model")
+    
     # Read HyperParameters
     json_file = os.path.join(driver_path, "inference/config.json")
     hyper_params = ParamsJson(json_file)
 
+    # Use persistent put to save hyper parameters (they do not change)
     dd.pput('model_hyper_params', hyper_params)
     logger.info(f"Loaded hyper params: {hyper_params}")
 

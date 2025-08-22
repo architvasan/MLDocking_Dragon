@@ -11,7 +11,8 @@ import logging
 import dragon
 import multiprocessing as mp
 from dragon.data.ddict import DDict
-from dragon.native.machine import current, System
+from dragon.native.machine import current, System, Node
+from dragon.infrastructure.policy import Policy
 import traceback
 from functools import partial
 
@@ -50,7 +51,7 @@ def read_smiles(file_tuple: Tuple[int, str, int]):
     :param file_path: file path to open
     :type file_path: pathlib.PosixPath
     """
-
+    tic_start = perf_counter()
     sort_test = os.getenv("TEST_SORTING")
 
     try:
@@ -63,6 +64,7 @@ def read_smiles(file_tuple: Tuple[int, str, int]):
         file_path = file_tuple[1]
 
         smiles = []
+        tic = perf_counter()
         f_name = str(file_path).split("/")[-1]
         f_extension = str(file_path).split("/")[-1].split(".")[-1]
         if f_extension == "smi":
@@ -75,6 +77,7 @@ def read_smiles(file_tuple: Tuple[int, str, int]):
                 for line in f:
                     smile = line.split("\t")[0]
                     smiles.append(smile)
+        read_time = perf_counter() - tic
 
         inf_results = [0.0 for i in range(len(smiles))]
         if sort_test:
@@ -95,18 +98,22 @@ def read_smiles(file_tuple: Tuple[int, str, int]):
 
 
         #print(f"Now putting key {key}", flush=True)
+        tic = perf_counter()
         data_dict[key] = {"f_name": f_name, 
                           "smiles": smiles, 
                           "inf": inf_results, 
                           "model_iter": -1}
+        put_time = perf_counter() - tic
 
         #print(f"Finished putting key {key}", flush=True)
         # data_dict[key] = smiles
         # with open(f"{outfiles_path}/{logname}.out",'a') as f:
         #     f.write(f"Stored data in dragon dictionary\n")
         #     f.write(f"key is {key}")
+        toc_end = perf_counter()
+        run_time = toc_end - tic_start
 
-        return smiles_size
+        return smiles_size, run_time, read_time, put_time
     except Exception as e:
         try:
             tb = traceback.format_exc()
@@ -136,9 +143,12 @@ def initialize_worker(the_ddict):
 
 def load_inference_data(_dict: DDict, 
                         data_path: str, 
-                        max_procs: int, 
+                        num_procs: int, 
                         num_managers: int, 
-                        num_files: int = None):
+                        num_files: int = None,
+                        nodelist: list = None,
+                        load_split_factor: int = 1,
+                        chunksize: int = 1):
     """Load pre-sorted inference data from files and to Dragon dictionary
 
     :param _dict: Dragon distributed dictionary
@@ -174,35 +184,78 @@ def load_inference_data(_dict: DDict,
     file_tuples = [(i, f, i % num_managers) for i, f in enumerate(files)]
 
     num_procs = min(max_procs, num_files)
-    logger.info(f"Number of pool procs is {num_procs}")
+    logger.info(f"Number of pool procs is {num_procs} and chunk size is {chunksize}")
     
-    total_data_size = 0
-    for i in range(4):
-        start_time = perf_counter()
+    #policy = None
+    #process_per_policy = 1
+    #if nodelist is not None:
+    #    policy = [Policy(placement=Policy.Placement.HOST_NAME, host_name=Node(nodelist[node]).hostname) \
+    #                for node in range(len(nodelist))]
 
-        num_pool_procs = num_procs
-        pool = mp.Pool(num_pool_procs, initializer=initialize_worker, initargs=(_dict,))
+    tic = perf_counter()
+    if load_split_factor == 1:
+        ticc = perf_counter()
+        pool = mp.Pool(num_procs, 
+                       initializer=initialize_worker, 
+                       initargs=(_dict,))
+        t_init = perf_counter() - ticc
         logger.info(f"Pool initialized")
         logger.info(f"Reading smiles for {num_files}")
-
-        num_files_per_pool = num_files // 4 + 1
-        logger.info(f"{num_pool_procs=} {num_files_per_pool=}")
-        smiles_sizes = pool.imap_unordered(
-            read_smiles,
-            file_tuples[
-                i
-                * num_files_per_pool : min((i + 1) * num_files_per_pool, num_files)
-            ],
-        )
-        iter_data_size = sum(smiles_sizes)/(1024.*1024.*1024.)
-        logger.info(f"Size of dataset is {iter_data_size} GB")
-        total_data_size += iter_data_size
-        logger.info(f"Mapped function complete")
+        outputs = pool.imap_unordered(read_smiles, file_tuples, chunksize=chunksize)
         pool.close()
-        logger.info(f"Pool closed")
         pool.join()
-        logger.info(f"Pool joined")
-    logger.info(f"Total data read in {total_data_size} GB")
+    else:
+        outputs = []
+        for i in range(load_split_factor):
+            iter_data_size = 0
+            num_pool_procs = num_procs
+            pool = mp.Pool(num_pool_procs, 
+                        initializer=initialize_worker, 
+                        initargs=(_dict,))
+            #print(f"Pool initialized", flush=True)
+            #print(f"Reading smiles for {num_files}", flush=True)
+
+            num_files_per_pool = num_files // load_split_factor + 1
+            logger.info(f"{num_pool_procs=} {num_files_per_pool=}")
+            output = pool.imap_unordered(
+                read_smiles,
+                file_tuples[
+                    i
+                    * num_files_per_pool : min((i + 1) * num_files_per_pool, num_files)
+                ],
+                chunksize=chunksize
+            )
+            outputs.extend(output)
+            #for out in outputs:
+            #    iter_data_size += out[0]
+            #    io_times.append(out[1])
+            #    ddict_times.append(out[2])
+            #iter_data_size = iter_data_size/(1024.*1024.*1024.)
+            #print(f"Size of dataset is {iter_data_size} GB", flush=True)
+            #total_data_size += iter_data_size
+            #print(f"Mapped function complete", flush=True)
+            #pool.close()
+            #print(f"Pool closed", flush=True)
+            #pool.join()
+            #print(f"Pool joined", flush=True)
+    load_time = perf_counter() - tic
+    
+    logger.info(f"Loaded inference data in {load_time} sec ({t_init=})",flush=True)
+
+    total_data_size = 0
+    run_times = []
+    io_times = []
+    ddict_times = []
+    for out in outputs:
+        total_data_size += out[0]
+        run_times.append(out[1])
+        io_times.append(out[2])
+        ddict_times.append(out[3])
+    total_data_size = total_data_size/(1024.*1024.*1024.)
+    logger.info(f"Total data read {total_data_size} GB", flush=True)
+    logger.info(f"Run times: avg={sum(run_times)/len(run_times)} sec, max={max(run_times)} sec", flush=True)
+    logger.info(f"IO times: avg={sum(io_times)/len(io_times)} sec, max={max(io_times)} sec", flush=True)
+    logger.info(f"DDict times: avg={sum(ddict_times)/len(ddict_times)} sec, max={max(ddict_times)} sec", flush=True)
     
 
 if __name__ == "__main__":

@@ -1,4 +1,6 @@
 import os
+from time import perf_counter
+
 import dragon
 import logging
 import multiprocessing as mp
@@ -11,6 +13,26 @@ from dragon.native.machine import Node
 from logging_config import train_logger as logger
 
 from .smiles_regress_transformer_run import fine_tune
+
+def read_output(stdout_conn: Connection) -> str:
+    """Read stdout from the Dragon connection.
+    :param stdout_conn: Dragon connection to rank 0's stdout
+    :type stdout_conn: Connection
+    :return: string with the output from stdout
+    :rtype: str
+    """
+    output = ""
+    try:
+        # this is brute force
+        while True:
+            tmp = stdout_conn.recv()
+            #print(tmp, flush=True)
+            output += tmp
+    except EOFError:
+        pass
+    finally:
+        stdout_conn.close()
+    return output
 
 
 def launch_training(model_list_dd: DDict, 
@@ -33,9 +55,16 @@ def launch_training(model_list_dd: DDict,
     run_dir = os.getcwd()
 
     # Create the process group
+    gpu_devices = os.getenv("GPU_DEVICES").split(",")
+    gpu_devices = [float(gid) for gid in gpu_devices]
+    gpu_devices = [gpu_devices[0]] # training only needs 1 GPU
+    cpu_affinity = os.getenv("TRAIN_CPU_AFFINITY").split(",")
+    cpu_affinity = [int(cid) for cid in cpu_affinity]
+    print(f'Launching training on {cpu_affinity} CPUs and {gpu_devices} GPU',flush=True)
+    
+    tic = perf_counter()
     global_policy = Policy(distribution=Policy.Distribution.BLOCK)
     grp = ProcessGroup(policy=global_policy)
-
     node_name = Node(node).hostname
 
     gpu_devices_string = os.getenv("GPU_DEVICES")
@@ -87,13 +116,15 @@ def launch_training(model_list_dd: DDict,
                                                 ))
     
     # Launch the ProcessGroup 
+    print(f"Starting Process Group for training",flush=True)
     grp.init()
     grp.start()
     logger.info(f"Starting Process Group for Training")
     
     grp.join()
     grp.close()
-    logger.info(f"Training process group stopped",flush=True)
+    toc = perf_counter()
+    logger.info(f"Training process group stopped in {toc-tic} seconds",flush=True)
     #print(dd["model_iter"])
     #print(dd["model"])
 

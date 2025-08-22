@@ -15,12 +15,11 @@ from typing import List, Optional
 import numpy as np
 import time
 from time import perf_counter
-import datetime
+from datetime import datetime
 import random
 from functools import cache
 import socket
 import psutil
-
 
 import dragon
 import multiprocessing as mp
@@ -353,7 +352,7 @@ def run_docking(sim_dd,
     ckey_max = docking_iter
     if debug:
         with open(log_file_name,"a") as f:
-            f.write(f"{datetime.datetime.now()}: Docking worker on iter {docking_iter} with candidate list {ckey_max}\n")
+            f.write(f"{datetime.now()}: Docking worker on iter {docking_iter} with candidate list {ckeys}\n")
 
     prev_top_candidates = []
     sim_iter = 0
@@ -475,16 +474,18 @@ def run_docking(sim_dd,
         prev_top_candidates = top_candidates.copy()
         sim_iter += 1
     #with open(f"finished_run_docking.log", "a") as f:
-    #    f.write(f"{datetime.datetime.now()}: iter {docking_iter}: proc {proc}: Finished docking sims \n")
+    #    f.write(f"{datetime.now()}: iter {docking_iter}: proc {proc}: Finished docking sims \n")
+    toc_end = perf_counter()
+    print(f"{toc_end-tic_start},{dict_time}",flush=True)
     return
 
 
-def dock(cdd: DDict, candidates: List[str], top_candidates_dict: dict, proc: int, debug=False):
+def dock(sdd: DDict, candidates: List[str], top_candidates_dict: dict, proc: int, debug=False):
     """Run OpenEye docking on a single ligand.
 
     Parameters
     ----------
-    cdd : DDict
+    sdd : DDict
         A Dragon Dictionary to store results
     candidates : List[str]
         A list of smiles strings that are top binding candidates.
@@ -549,12 +550,12 @@ def dock(cdd: DDict, candidates: List[str], top_candidates_dict: dict, proc: int
         dock_scores.append(dock_score)
         dtic = perf_counter()
         inf_scores = [top_candidates_dict[smiles]]
-        cdd[smiles] = {'dock_score':dock_score, 'inf_scores':inf_scores}
+        sdd[smiles] = {'dock_score':dock_score, 'inf_scores':inf_scores}
         # with open(f"dock_worker_{proc}.log","a") as f:
         #     f.write(f"{smiles=} {dock_score=} {inf_scores=}\n")
         dtoc = perf_counter()
-        data_store_time += dtic-dtoc
-        data_store_size += sys.getsizeof(smiles) + sys.getsizeof(dock_score)
+        ddict_time = dtoc-dtic
+        ddict_size = sys.getsizeof(smiles) + sys.getsizeof(dock_score)
         smiter += 1
         
     toc = perf_counter()
@@ -564,7 +565,7 @@ def dock(cdd: DDict, candidates: List[str], top_candidates_dict: dict, proc: int
         with open(log_file_name,"a") as f:
             f.write(f"All candidates completed: {smiter == num_cand}\n")
 
-        new_keys = cdd.keys()
+        new_keys = sdd.keys()
         num_sim = 0
         for smiles in candidates:
             if smiles in new_keys:
@@ -574,8 +575,8 @@ def dock(cdd: DDict, candidates: List[str], top_candidates_dict: dict, proc: int
     metrics = {}
     metrics['total_run_time'] = toc-tic
     metrics['num_cand'] = num_cand
-    metrics['data_store_time'] = data_store_time
-    metrics['data_store_size'] =  data_store_size
+    metrics['ddict_time'] = ddict_time
+    metrics['dict_size'] =  ddict_size
 
     if debug:
         with open(log_file_name,"a") as f:
@@ -587,7 +588,7 @@ def dock(cdd: DDict, candidates: List[str], top_candidates_dict: dict, proc: int
 
 
 
-def dummy_dock(cdd, candidates, top_candidates_dict, proc: int, debug=False):
+def dummy_dock(sdd, candidates, top_candidates_dict, proc: int, debug=False):
     """Run OpenEye docking on a single ligand.
 
     Parameters
@@ -626,7 +627,7 @@ def dummy_dock(cdd, candidates, top_candidates_dict, proc: int, debug=False):
 
 
         dtic = perf_counter()
-        cdd[smiles] = {'dock_score':dock_score, 'inf_scores':[top_candidates_dict[smiles]]}
+        sdd[smiles] = {'dock_score':dock_score, 'inf_scores':[top_candidates_dict[smiles]]}
         dtoc = perf_counter()
         data_store_time += dtic-dtoc
         data_store_size += sys.getsizeof(smiles) + sys.getsizeof(dock_score)
