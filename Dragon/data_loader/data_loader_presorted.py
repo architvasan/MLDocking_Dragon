@@ -143,7 +143,7 @@ def initialize_worker(the_ddict):
 
 def load_inference_data(_dict: DDict, 
                         data_path: str, 
-                        num_procs: int, 
+                        max_procs: int, 
                         num_managers: int, 
                         num_files: int = None,
                         nodelist: list = None,
@@ -240,7 +240,7 @@ def load_inference_data(_dict: DDict,
             #print(f"Pool joined", flush=True)
     load_time = perf_counter() - tic
     
-    logger.info(f"Loaded inference data in {load_time} sec ({t_init=})",flush=True)
+    logger.info(f"Loaded inference data in {load_time} sec ({t_init=})")
 
     total_data_size = 0
     run_times = []
@@ -252,10 +252,10 @@ def load_inference_data(_dict: DDict,
         io_times.append(out[2])
         ddict_times.append(out[3])
     total_data_size = total_data_size/(1024.*1024.*1024.)
-    logger.info(f"Total data read {total_data_size} GB", flush=True)
-    logger.info(f"Run times: avg={sum(run_times)/len(run_times)} sec, max={max(run_times)} sec", flush=True)
-    logger.info(f"IO times: avg={sum(io_times)/len(io_times)} sec, max={max(io_times)} sec", flush=True)
-    logger.info(f"DDict times: avg={sum(ddict_times)/len(ddict_times)} sec, max={max(ddict_times)} sec", flush=True)
+    logger.info(f"Total data read {total_data_size} GB")
+    logger.info(f"Run times: avg={sum(run_times)/len(run_times)} sec, max={max(run_times)} sec")
+    logger.info(f"IO times: avg={sum(io_times)/len(io_times)} sec, max={max(io_times)} sec")
+    logger.info(f"DDict times: avg={sum(ddict_times)/len(ddict_times)} sec, max={max(ddict_times)} sec")
     
 
 if __name__ == "__main__":

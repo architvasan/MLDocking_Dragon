@@ -20,7 +20,7 @@ from docking_sim.launch_docking_sim import launch_docking_sim
 from training.launch_training import launch_training
 from data_loader.data_loader_presorted import get_files
 from data_loader.model_loader import load_pretrained_model
-from driver_functions import max_data_dict_size, output_sims
+from driver_functions import max_data_dict_size
 from logging_config import driver_logger as logger
 
 
@@ -61,7 +61,6 @@ if __name__ == "__main__":
     tot_mem = args.mem_per_node * num_tot_nodes
 
     # Get info about gpus and cpus
-
     gpu_devices = os.getenv("GPU_DEVICES")
     if gpu_devices is not None:
         gpu_devices = gpu_devices.split(",")
@@ -69,45 +68,70 @@ if __name__ == "__main__":
     else:
         num_gpus = 0
 
-    # for this sequential loop test set inference and docking to all the nodes and sorting and training to one node
+    # for this test set inference and docking to all the nodes and sorting and training to one node
     node_counts = {
         "sorting": num_tot_nodes,
         "training": 1,
         "inference": num_tot_nodes,
-        "docking": num_tot_nodes,
+        "simulation": num_tot_nodes,
     }
 
     nodelists = {}
     offset = 0
     for key in node_counts.keys():
         nodelists[key] = tot_nodelist[offset:offset+node_counts[key]]
-        offset += node_counts[key]
+        #offset += node_counts[key]
     
-    print(f"{nodelists=}")
+    logger.debug(f"{nodelists=}")
 
-    # Set up and launch the inference DDict
-    # inf_dd_nodelist = tot_nodelist[:args.inf_dd_nodes]
-    # inf_dd_mem_size = args.mem_per_node*args.inf_dd_nodes
-    # inf_dd_mem_size *= (1024*1024*1024)
-    data_dict_mem = int(args.data_dictionary_mem_fraction*tot_mem)
-    candidate_dict_mem = tot_mem - data_dict_mem
-    data_dict_mem *= (1024*1024*1024)
-    candidate_dict_mem *= (1024*1024*1024)
+        # Set the number of nodes the dictionary uses
+    num_dict_nodes = num_tot_nodes
 
-    # Start distributed dictionary used for inference
-    #inf_dd_policy = Policy(placement=Policy.Placement.HOST_NAME, host_name=Node(inf_dd_nodelist).hostname)
-    # Note: the host name based policy, as far as I can tell, only takes in a single node, not a list
-    #       so at the moment we can't specify to the inf_dd to run on a list of nodes.
-    #       But by setting inf_dd_nodes < num_tot_nodes, we can make it run on the first inf_dd_nodes nodes only
-    dict_timeout = 200
-    data_dd = DDict(args.managers_per_node, num_tot_nodes, data_dict_mem, 
-                   timeout=args.dictionary_timeout, num_streams_per_manager=args.channels_per_manager)
-    print(f"Launched Dragon Dictionary for inference with total memory size {data_dict_mem}", flush=True)
-    print(f"on {num_tot_nodes} nodes", flush=True)
+    # Get info on the number of files
+    base_path = pathlib.Path(args.data_path)
+    files, num_files = get_files(base_path)
+    num_files = 128
+
+    tot_mem = args.mem_per_node*num_tot_nodes
+    logger.info(f"There are {num_files} files")
+
+    # There are 3 dictionaries:
+    # 1. data dictionary for inference
+    # 2. simulation dictionary for docking simulation results
+    # 3. model and candidate dictionary for training
+    # The model and candidate dictionary will be checkpointed
+
+    # Set up and launch the inference data DDict and top candidate DDict
+    # Calculate memory allocation for each dictionary
+    data_dict_mem, sim_dict_mem, model_list_dict_mem = max_data_dict_size(num_files, node_counts, max_pool_frac=0.5)
+    logger.info(f"Setting data_dict size to {data_dict_mem} GB")
+    logger.info(f"Setting sim_dict size to {sim_dict_mem} GB")
+    logger.info(f"Setting model_list_dict size to {model_list_dict_mem} GB")
+
+      # Check if total memory required exceeds available memory
+    if data_dict_mem + sim_dict_mem + model_list_dict_mem > tot_mem:
+        logger.info(f"Sum of dictionary sizes exceed total mem: {data_dict_mem=} {sim_dict_mem=} {model_list_dict_mem=} {tot_mem=}")
+        raise Exception("Not enough memory for DDicts")
+
+    # Convert memory sizes to bytes
+    data_dict_mem *= (1024 * 1024 * 1024)
+    sim_dict_mem *= (1024 * 1024 * 1024)
+    model_list_dict_mem *= (1024 * 1024 * 1024)
+
+    # Initialize Dragon Dictionaries for inference, docking simulation, and model list
+    data_dd = DDict(args.managers_per_node, num_tot_nodes, data_dict_mem)
+    logger.info(f"Launched Dragon Dictionary for inference with total memory size {data_dict_mem} on {num_tot_nodes} nodes")
+    sim_dd = DDict(args.managers_per_node, num_tot_nodes, sim_dict_mem)
+    logger.info(f"Launched Dragon Dictionary for docking simulation with total memory size {sim_dict_mem} on {num_tot_nodes} nodes")
+    model_list_dd = DDict(args.managers_per_node, num_tot_nodes, model_list_dict_mem, working_set_size=10, wait_for_keys=True)
+    logger.info(f"Launched Dragon Dictionary for model list with total memory size {model_list_dict_mem} on {num_tot_nodes} nodes")
+
+
+
     
     # Launch the data loader component
     max_procs = args.max_procs_per_node*num_tot_nodes
-    print("Loading inference data into Dragon Dictionary ...", flush=True)
+    logger.info("Loading inference data into Dragon Dictionary ...")
     tic = perf_counter()
     loader_proc = mp.Process(
         target=load_inference_data,
@@ -215,15 +239,15 @@ if __name__ == "__main__":
 
 #     # Launch Docking Simulations
     logger.info(f"Launched Docking Simulations")
-    num_procs = args.max_procs_per_node * node_counts["docking"]
+    num_procs = args.max_procs_per_node * node_counts["simulation"]
     num_procs = min(num_procs, top_candidate_number//4)
-    num_procs = max(num_procs, node_counts["docking"])
+    num_procs = max(num_procs, node_counts["simulation"])
     dock_proc = mp.Process(
         target=launch_docking_sim,
         args=(sim_dd, 
             model_list_dd, 
             num_procs, 
-            nodelists["docking"], 
+            nodelists["simulation"], 
             continue_event,),
     )
     dock_proc.start()

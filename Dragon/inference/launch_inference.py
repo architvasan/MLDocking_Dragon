@@ -34,8 +34,6 @@ def launch_inference(data_dd: DDict,
     :param num_procs: number of processes to use for inference
     :type num_procs: int
     """
-
-    #logger = setup_logger('inf', "inference.log", level=logging.INFO)
     
     num_inf_nodes = len(nodelist)
 
@@ -43,7 +41,7 @@ def launch_inference(data_dd: DDict,
     if int(os.environ.get('USE_CCS', '0')) == 1:
         ccs_string = os.getenv("ZEX_NUMBER_OF_CCS")
         num_ccs = int(ccs_string.split(",")[0].split(":")[1])
-        print(f"Using {num_ccs} CCS on Aurora PVC",flush=True)
+        logger.info(f"Using {num_ccs} CCS on Aurora PVC")
 
     gpu_devices_string = os.getenv("GPU_DEVICES")
     inf_gpu_bind = []
@@ -54,10 +52,10 @@ def launch_inference(data_dd: DDict,
             else:
                 inf_gpu_bind.append([int(g)])
     num_procs_pn = len(inf_gpu_bind)  # number of procs per node is number of gpus
-    print(f"Inference running on {num_inf_nodes} nodes and {num_procs_pn} processes per node", flush=True)
+    logger.info(f"Inference running on {num_inf_nodes} nodes and {num_procs_pn} processes per node")
 
-    cpu_affinity_string = os.getenv("INF_CPU_AFFINITY")
-    cpu_ranges = cpu_affinity_string.split(":")
+    cpu_affinity_string = os.getenv("CPU_AFFINITY")
+    cpu_ranges = [cpu_aff for cpu_aff in cpu_affinity_string.split(":") if cpu_aff != "list"]
     inf_cpu_bind = []
     for cr in cpu_ranges:
         bind_threads = []

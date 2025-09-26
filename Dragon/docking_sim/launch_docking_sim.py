@@ -30,6 +30,7 @@ def launch_docking_sim(sim_dd,
     """
     run_dir = os.getcwd()
     num_nodes = len(nodelist)
+    num_procs_pn = num_procs // num_nodes
 
     skip_threads = os.getenv("SKIP_THREADS")
     if skip_threads:
@@ -83,8 +84,6 @@ def launch_docking_sim(sim_dd,
     grp = ProcessGroup(policy=global_policy)
     for node_num in range(num_nodes):
         node_name = Node(nodelist[node_num]).hostname
-        if node_num == num_nodes-1:
-            num_procs_pn = remainder_procs_pn
         for proc in range(num_procs_pn):
             if proc in skip_threads or proc in inf_cpu_bind:
                 continue
