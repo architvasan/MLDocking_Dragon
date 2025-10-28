@@ -103,8 +103,8 @@ def read_smiles(file_tuple: Tuple[int, str, int]):
 
         stash_tic = perf_counter()
         # Get handle to Dragon dictionary from worker process stash
-        me = mp.current_process()
-        data_dict = me.stash["ddict"]
+        #me = mp.current_process()
+        #data_dict = me.stash["ddict"]
         stash_toc = perf_counter()
         if debug:
             with open(f"{outfiles_path}/{logname}.out",'a') as f:
@@ -112,10 +112,10 @@ def read_smiles(file_tuple: Tuple[int, str, int]):
 
         ddict_tic = perf_counter()
         #print(f"Now putting key {key}", flush=True)
-        data_dict[key] = {"f_name": f_name, 
-                          "smiles": smiles, 
-                          "inf": inf_results, 
-                          "model_iter": -1}
+        #data_dict[key] = {"f_name": f_name, 
+        #                  "smiles": smiles, 
+        #                  "inf": inf_results, 
+        #                  "model_iter": -1}
         ddict_toc = perf_counter()
         toc = perf_counter()
         if debug:

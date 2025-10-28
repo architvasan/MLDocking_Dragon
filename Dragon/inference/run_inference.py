@@ -17,9 +17,11 @@ from inference.utils_encoder import SMILES_SPE_Tokenizer
 #from training.ST_funcs.clr_callback import *
 #from training.ST_funcs.smiles_regress_transformer_funcs import *
 from data_loader.model_loader import retrieve_model_from_dict
+from data_loader.model_loader import load_pretrained_model
 
 import keras
 import tensorflow as tf
+import intel_extension_for_tensorflow as itex
 tf.get_logger().setLevel('ERROR')
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
@@ -127,22 +129,22 @@ def infer(dd, num_procs, proc, continue_event, limit=None, debug=True):
         hostname = socket.gethostname()
         print(f"Launching infer for worker {proc} from process {p} on core {core_list} on device {hostname}:{device}", flush=True)
     
-    
-    # Get local keys
-    current_host = host_id()
-    manager_nodes = dd.manager_nodes
-    keys = []
-    print(f"{current_host=}",flush=True)
-    if proc == 0:
-        print(f"{manager_nodes=}",flush=True)
-    for i in range(len(manager_nodes)):
-        if manager_nodes[i].h_uid == current_host:
-            local_manager = i
-            #print(f"{proc}: getting keys from local manager {local_manager}")
-            dm = dd.manager(i)
-            keys.extend(dm.keys())
+    if type(dd) is not dict:
+        # Get local keys
+        current_host = host_id()
+        manager_nodes = dd.manager_nodes
+        keys = []
+        if proc == 0:
+            print(f"{manager_nodes=}",flush=True)
+        for i in range(len(manager_nodes)):
+            if manager_nodes[i].h_uid == current_host:
+                local_manager = i
+                #print(f"{proc}: getting keys from local manager {local_manager}")
+                dm = dd.manager(i)
+                keys.extend(dm.keys())
+    else:
+        keys = dd.keys()
     print(f"{proc}: found {len(keys)} local keys")
-    
     # Load model from dictionary
     model,model_iter,hyper_params = retrieve_model_from_dict(dd)
     
@@ -161,7 +163,7 @@ def infer(dd, num_procs, proc, continue_event, limit=None, debug=True):
     #print(f"{proc}: {split_keys}",flush=True)
     if debug:
         with open(log_file_name, "a") as f:
-            f.write(f"Running inference on {len(split_keys)} keys\n")
+            f.write(f"Running inference on {len(split_keys)} keys of {len(keys)} keys\n")
     
     # Set up tokenizer
     # if hyper_params['tokenization']['tokenizer']['category'] == 'smilespair':
@@ -182,7 +184,7 @@ def infer(dd, num_procs, proc, continue_event, limit=None, debug=True):
 
     for ikey in range(num_run):
         # Print progress to stdout every 8 iters
-        if ikey%8 == 0:
+        if ikey%(num_run//5) == 0 and ikey > 0:
            print(f"...worker {proc} has completed {ikey} keys out of {num_run} with model {model_iter}", flush=True)
         if check_model_iter(dd, model_iter, continue_event):  # this check is to stop inference in async wf when model is retrained
             ktic = perf_counter()
@@ -274,13 +276,16 @@ if __name__ == "__main__":
     continue_event = None
     dd = {}
 
+    load_pretrained_model(dd)
 
     file_dir = os.getenv("DATA_PATH")
     all_files = glob.glob(file_dir+"*.gz")
+    print(f"file_dir={file_dir}")
     files = all_files[0:1]
+    print(f"Found {len(all_files)} files")
     num_files = len(files)
     file_tuples = [(i,fpath,i) for i,fpath in enumerate(files)]
-
+    print(f"{file_tuples=}")
 
     for file_tuple in file_tuples:
         file_index = file_tuple[0]
@@ -310,3 +315,4 @@ if __name__ == "__main__":
                    "inf": inf_results}
     
     infer(dd, num_procs, proc, continue_event, limit=None)
+

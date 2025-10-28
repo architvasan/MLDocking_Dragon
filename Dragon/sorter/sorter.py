@@ -13,6 +13,7 @@ from dragon.infrastructure.connection import Connection
 from dragon.native.machine import cpu_count, current, System, Node
 from dragon.utils import host_id
 from .sort_mpi import mpi_sort
+from dragon.infrastructure.facts import PMIBackend
 import datetime
 
 import time
@@ -335,7 +336,7 @@ def sort_dictionary_pg(dd: DDict,
     print(f"Direct sorting {direct_sort_num} keys per process",flush=True)
 
     global_policy = Policy(distribution=Policy.Distribution.BLOCK)
-    grp = ProcessGroup(policy=global_policy, pmi_enabled=True)
+    grp = ProcessGroup(policy=global_policy, pmi=PMIBackend.PMIX)
 
     print(f"Launching sorting process group {nodelist}", flush=True)
     for node in nodelist:

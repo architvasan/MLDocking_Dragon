@@ -1,6 +1,6 @@
 import pathlib
 import gzip
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Tuple
 import argparse
 import os
@@ -52,93 +52,8 @@ def read_smiles(file_tuple: Tuple[int, str, int]):
     :param file_path: file path to open
     :type file_path: pathlib.PosixPath
     """
-    tic = perf_counter()
-    outfiles_path = f"smiles_sizes/{file_tuple[2]}"
-    sort_test = os.getenv("TEST_SORTING")
-    debug = False
-
-    if debug:
-        os.makedirs(outfiles_path, exist_ok=True)
-
-    try:
-        
-        file_tic = perf_counter()
-        # Read smiles from file
-        file_index = file_tuple[0]
-        manager_index = file_tuple[2]
-        file_path = file_tuple[1]
-
-        smiles = []
-        f_name = str(file_path).split("/")[-1]
-        f_extension = str(file_path).split("/")[-1].split(".")[-1]
-        if f_extension == "smi":
-            with file_path.open() as f:
-                for line in f:
-                    smile = line.split("\t")[0]
-                    smiles.append(smile)
-        elif f_extension == "gz":
-            with gzip.open(str(file_path), "rt") as f:
-                for line in f:
-                    smile = line.split("\t")[0]
-                    smiles.append(smile)
-        file_toc = perf_counter()
-        
-        f_name_list = f_name.split(".gz")
-        logname = f_name_list[0].split(".")[0] + f_name_list[1]
-        if debug:
-            with open(f"{outfiles_path}/{logname}.out",'a') as f:
-                f.write(f"Worker located on {current().hostname}\n")
-                f.write(f"Read smiles from {f_name} in {file_toc - file_tic}s\n")
-                f.write(f"Number of smiles read: {len(smiles)}\n")
-
-        inf_results = [0.0 for i in range(len(smiles))]
-        if sort_test:
-            inf_results = [random.uniform(8.0, 14.0) for i in range(len(smiles))]
-        key = f"{manager_index}_{file_index}"
-
-        smiles_size = sum([sys.getsizeof(s) for s in smiles])
-        smiles_size += sum([sys.getsizeof(infr) for infr in inf_results])
-        smiles_size += sys.getsizeof(f_name)
-        smiles_size += sys.getsizeof(key)
-
-        stash_tic = perf_counter()
-        # Get handle to Dragon dictionary from worker process stash
-        me = mp.current_process()
-        data_dict = me.stash["ddict"]
-        stash_toc = perf_counter()
-        if debug:
-            with open(f"{outfiles_path}/{logname}.out",'a') as f:
-                f.write(f"Retrieved ddict from stash in {stash_toc - stash_tic}s\n")
-
-        ddict_tic = perf_counter()
-        #print(f"Now putting key {key}", flush=True)
-        data_dict[key] = {"f_name": f_name, 
-                          "smiles": smiles, 
-                          "inf": inf_results, 
-                          "model_iter": -1}
-        ddict_toc = perf_counter()
-        toc = perf_counter()
-        if debug:
-            with open(f"{outfiles_path}/{logname}.out",'a') as f:
-                f.write(f"Stored {smiles_size} bytes in dragon dictionary in {ddict_toc - ddict_tic}s\n")
-                f.write(f"Total time to read and store smiles from {f_name} is {toc - tic}s\n")
-        return smiles_size
-    except Exception as e:
-        try:
-            tb = traceback.format_exc()
-            msg = "Error while reading smiles data:\n%s\n Traceback:\n%s"%(e, tb)
-            if not os.path.exists(outfiles_path):
-                os.mkdir(outfiles_path)
-            with open(f"{outfiles_path}/{logname}.out", "a") as f:
-                f.write(f"key is {key}")
-                f.write(f"Worker located on {current().hostname}\n")
-                f.write(f"Read smiles from {f_name}, smiles size is {smiles_size}\n")
-                f.write("Exception was: %s\n"%msg)
-                f.write("Pool Stats:\n%s\n"%data_dict.stats)
-            raise Exception(e)
-        except Exception as ex:
-            print("GOT EXCEPTION IN EXCEPTION")
-            print(ex)
+    sleep(0.1)
+    return 0.0
 
 
 def initialize_worker(the_ddict):

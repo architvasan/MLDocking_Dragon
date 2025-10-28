@@ -11,6 +11,7 @@
 
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.preprocessing import sequence, text
+import intel_extension_for_tensorflow as itex
 
 #from .ST_funcs.clr_callback import *
 from .ST_funcs.smiles_regress_transformer_funcs import train_val_data

@@ -94,12 +94,12 @@ if __name__ == "__main__":
     print(f"There are {num_files} files")
 
     # Set up and launch the inference data DDict and top candidate DDict
-    data_dict_mem, candidate_dict_mem = max_data_dict_size(num_files, max_pool_frac = 0.8)
+    data_dict_mem, candidate_dict_mem = max_data_dict_size(num_files, max_pool_frac = 0.5)
     print(f"Setting data_dict size to {data_dict_mem} GB and candidate_dict size to {candidate_dict_mem} GB")
 
     if data_dict_mem + candidate_dict_mem > tot_mem:
         print(f"Sum of dictionary sizes exceed total mem: {data_dict_mem=} {candidate_dict_mem=} {tot_mem=}", flush=True)
-        raise Exception("Not enough memory for DDicts")
+        #raise Exception("Not enough memory for DDicts")
 
     data_dict_mem *= (1024*1024*1024)
     candidate_dict_mem *= (1024*1024*1024)
@@ -139,8 +139,9 @@ if __name__ == "__main__":
     toc = perf_counter()
     load_time = toc - tic
     if loader_proc.exitcode == 0:
-        print(f"Loaded inference data in {load_time:.3f} seconds", flush=True)
+        print(f"Loaded inference data in {load_time:.3f} seconds, {loader_proc.exitcode}", flush=True)
     else:
+        #print(f"Data loading failed with exception {loader_proc.exitcode}",flush=True)
         raise Exception(f"Data loading failed with exception {loader_proc.exitcode}")
 
     # Update driver log
@@ -169,7 +170,7 @@ if __name__ == "__main__":
     # Set up the inference and sorting processes
     iter = 0
     with open("driver_times.log", "a") as f:
-        f.write(f"# iter  infer_time  sort_time \n")
+        f.write(f"# iter  infer_time  sort_time mpi_sort_time \n")
 
     # Launch the data inference component
     num_procs = num_gpus*node_counts["inference"]
@@ -198,50 +199,61 @@ if __name__ == "__main__":
 
     if inf_proc.exitcode != 0:
         raise Exception("Inference failed!\n")
-    
+        #print("Inference failed")
     # Launch data sorter component
     print(f"Launching sorting ...", flush=True)
     tic = perf_counter()
     if iter == 0:
         cand_dd["max_sort_iter"] = "-1"
 
-    random_number = int(0.1*top_candidate_number)
+    #random_number = int(0.1*top_candidate_number)
+    random_number = 0
     print(f"Adding {random_number} random candidates to training", flush=True)
-    if os.getenv("USE_MPI_SORT"):
-        print("Using MPI sort",flush=True)
-        max_sorter_procs = args.max_procs_per_node*node_counts["sorting"]
-        sorter_proc = mp.Process(target=sort_dictionary_pg, 
-                                    args=(data_dd,
-                                        top_candidate_number,
-                                        max_sorter_procs, 
-                                        nodelists["sorting"],
-                                        cand_dd,
-                                        random_number,
-                                        ),
+    
+    print("Using filter sort", flush=True)
+    sorter_proc = mp.Process(target=sort_dictionary,
+                                args=(
+                                    data_dd,
+                                    top_candidate_number,
+                                    cand_dd,
+                                    ),
                                 )
-        sorter_proc.start()
-        sorter_proc.join()
-    else:
-        print("Using filter sort", flush=True)
-        sorter_proc = mp.Process(target=sort_dictionary,
-                                    args=(
-                                        data_dd,
-                                        top_candidate_number,
-                                        cand_dd,
-                                        ),
-                                    )
-        sorter_proc.start()
-        sorter_proc.join()
+    sorter_proc.start()
+    sorter_proc.join()
     if sorter_proc.exitcode != 0:
         raise Exception("Sorting failed\n")
-
+        #print("sorting failed")
+        
     toc = perf_counter()
     sort_time = toc - tic
     print(f"Performed sorting of {num_keys} keys in {sort_time:.3f} seconds \n", flush=True)
+    tic = perf_counter()
+    
+    print("Using MPI sort",flush=True)
+    max_sorter_procs = 8*node_counts["sorting"]
+    mpi_sorter_proc = mp.Process(target=sort_dictionary_pg, 
+                                args=(data_dd,
+                                    top_candidate_number,
+                                    max_sorter_procs, 
+                                    nodelists["sorting"],
+                                    cand_dd,
+                                    random_number,
+                                    ),
+                            )
+    mpi_sorter_proc.start()
+    mpi_sorter_proc.join()
+    
+    if mpi_sorter_proc.exitcode != 0:
+        raise Exception("MPI sorting failed\n")
+        #print("sorting failed")
+        
+    toc = perf_counter()
+    mpi_sort_time = toc - tic
+    print(f"Performed mpi sorting of {num_keys} keys in {mpi_sort_time:.3f} seconds \n", flush=True)
 
 
     with open("driver_times.log", "a") as f:
-        f.write(f"{iter}  {infer_time}  {sort_time} \n")
+        f.write(f"{iter}  {infer_time}  {sort_time} {mpi_sort_time} \n")
 
     tic = perf_counter()
     output_sims(cand_dd, iter=iter)

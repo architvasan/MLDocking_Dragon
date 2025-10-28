@@ -12,7 +12,7 @@ from dragon.data.ddict import DDict
 from dragon.native.machine import System, Node
 from dragon.infrastructure.policy import Policy
 
-from data_loader.data_loader_presorted import load_inference_data
+from data_loader.data_loader_dummy import load_inference_data
 #from inference.launch_inference import launch_inference
 #from sorter.sorter import sort_dictionary_pg, sort_dictionary
 #from docking_sim.launch_docking_sim import launch_docking_sim
