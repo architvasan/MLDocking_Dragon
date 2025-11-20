@@ -13,6 +13,7 @@ from dragon.utils import host_id
 import logging
 
 #from inference.utils_transformer import ParamsJson, ModelArchitecture, pad
+import intel_extension_for_tensorflow as itex
 from inference.utils_transformer import pad
 from inference.utils_encoder import SMILES_SPE_Tokenizer
 #from training.ST_funcs.clr_callback import *
