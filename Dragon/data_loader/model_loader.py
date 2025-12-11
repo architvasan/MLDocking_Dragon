@@ -3,6 +3,7 @@ import os
 from typing import Union
 from dragon.data.ddict.ddict import DDict
 from training.ST_funcs.smiles_regress_transformer_funcs import ModelArchitecture, ParamsJson
+from time import perf_counter
 
 driver_path = os.getenv("DRIVER_PATH")
 
@@ -33,9 +34,9 @@ def save_model_weights(dd: Union[DDict, dict], model, checkpoint=False):
         dd.checkpoint()
 
     # Use broadcast put to save model weights on every manager
-    dd.bput(f'model_{iter}', weights_dict)
+    dd.bput(f'model', weights_dict)
 
-    logger.info(f"Saved model to dictionary on iter {dd.checkpoint_id}")
+    logger.info(f"Saved model to dictionary on checkpoint {dd.checkpoint_id}")
 
 def retrieve_model_from_dict(dd: Union[DDict, dict], checkpoint=False, hyper_params=None):
  
@@ -48,7 +49,9 @@ def retrieve_model_from_dict(dd: Union[DDict, dict], checkpoint=False, hyper_par
     logger.debug(f"Loading model weights from dictionary with checkpoint_id: {model_iter}")
     logger.info(f"{list(dd.keys())=}")
 
+    tic = perf_counter()
     weights_dict = dd.bget('model')
+    logger.debug(f"bget time: {perf_counter()-tic:.4f} seconds")
     if hyper_params is None:
         hyper_params = dd["model_hyper_params"]
 

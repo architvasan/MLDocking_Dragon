@@ -13,7 +13,7 @@ from dragon.native.machine import Node
 
 from inference.utils_transformer import ParamsJson, ModelArchitecture, pad
 from logging_config import inf_logger as logger
-from .run_inference import infer
+from .run_inference import run_inference_loop
 
 driver_path = os.getenv("DRIVER_PATH")
 
@@ -100,24 +100,30 @@ def launch_inference(data_dd: DDict,
                                   cpu_affinity=inf_cpu_bind[proc],
                                   gpu_affinity=inf_gpu_bind[proc])
             grp.add_process(nproc=1, 
-                            template=ProcessTemplate(target=infer, 
-                                                     args=(data_dd,
-                                                        model_list_dd,
-                                                        iter,
-                                                        num_procs_pn,
-                                                        proc_id, 
-                                                        continue_event, # Continue event not used in sequential wf
-                                                        checkpoint_id,
-                                                        inf_num_limit,
-                                                        debug,
-                                                        new_model_event,
-                                                        barrier,
-                                                        ), 
+                            template=ProcessTemplate(target=run_inference_loop,
+                                                    args=(model_list_dd,
+                                                            data_dd,
+                                                            proc_id,
+                                                            num_procs_pn*num_inf_nodes,
+                                                            continue_event,
+                                                            new_model_event,
+                                                            barrier,), 
+                                                    #  args=(data_dd,
+                                                    #     model_list_dd,
+                                                    #     iter,
+                                                    #     num_procs_pn,
+                                                    #     proc_id, 
+                                                    #     continue_event, # Continue event not used in sequential wf
+                                                    #     checkpoint_id,
+                                                    #     inf_num_limit,
+                                                    #     debug,
+                                                    #     new_model_event,
+                                                    #     barrier,
+                                                    #     ), 
                                                      cwd=run_dir,
                                                      policy=local_policy,))
     
     # Launch the ProcessGroup 
-    print(f"Starting Process Group for inference", flush=True)
     grp.init()
     logger.info(f"Starting Process Group for Inference")
     grp.start()
@@ -125,4 +131,4 @@ def launch_inference(data_dd: DDict,
     logger.info(f"Joined Process Group for Inference")
     grp.close()
     toc = perf_counter()
-    print(f"Performed inference in {toc-tic} seconds", flush=True)
+    logger.info(f"Performed inference in {toc-tic} seconds")

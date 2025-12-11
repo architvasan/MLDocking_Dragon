@@ -20,7 +20,7 @@ from docking_sim.launch_docking_sim import launch_docking_sim
 from training.launch_training import launch_training
 from data_loader.data_loader_presorted import get_files
 from data_loader.model_loader import load_pretrained_model
-from driver_functions import max_data_dict_size
+from driver_functions import max_data_dict_size, get_available_threads
 from logging_config import driver_logger as logger
 
 
@@ -36,8 +36,8 @@ if __name__ == "__main__":
                         help='Maximum number of processes in a Pool')
     parser.add_argument('--max_iter', type=int, default=10,
                         help='Maximum number of iterations')
-    parser.add_argument('--dictionary_timeout', type=int, default=10,
-                        help='Timeout for Dictionary in seconds')
+    parser.add_argument('--num_files', type=int, default=128,
+                        help='Number of files to load')
     parser.add_argument('--data_path', type=str, default="/lus/eagle/clone/g2/projects/hpe_dragon_collab/balin/ZINC-22-2D-smaller_files",
                         help='Path to pre-sorted SMILES strings to load')
 
@@ -45,8 +45,8 @@ if __name__ == "__main__":
 
     # Start driver
     start_time = perf_counter()
-    print("Begun dragon driver", flush=True)
-    print(f"Reading inference data from path: {args.data_path}", flush=True)
+    # print("Begun dragon driver", flush=True)
+    # print(f"Reading inference data from path: {args.data_path}", flush=True)
 
     logger.info("Begun dragon driver")
     logger.info(f"Reading inference data from path: {args.data_path}")
@@ -57,8 +57,6 @@ if __name__ == "__main__":
     alloc = System()
     num_tot_nodes = int(alloc.nnodes)
     tot_nodelist = alloc.nodes
-
-    tot_mem = args.mem_per_node * num_tot_nodes
 
     # Get info about gpus and cpus
     gpu_devices = os.getenv("GPU_DEVICES")
@@ -84,23 +82,23 @@ if __name__ == "__main__":
     
     logger.debug(f"{nodelists=}")
 
-        # Set the number of nodes the dictionary uses
+    # Set the number of nodes the dictionary uses
     num_dict_nodes = num_tot_nodes
-
-    # Get info on the number of files
-    base_path = pathlib.Path(args.data_path)
-    files, num_files = get_files(base_path)
-    num_files = 128
-
-    tot_mem = args.mem_per_node*num_tot_nodes
-    logger.info(f"There are {num_files} files")
 
     # There are 3 dictionaries:
     # 1. data dictionary for inference
     # 2. simulation dictionary for docking simulation results
     # 3. model and candidate dictionary for training
     # The model and candidate dictionary will be checkpointed
+    
+    # Get info on the number of files
+    base_path = pathlib.Path(args.data_path)
+    #files, num_files = get_files(base_path)
+    num_files = args.num_files
+    logger.info(f"There are {num_files} files")
 
+    tot_mem = args.mem_per_node*num_tot_nodes
+    
     # Set up and launch the inference data DDict and top candidate DDict
     # Calculate memory allocation for each dictionary
     data_dict_mem, sim_dict_mem, model_list_dict_mem = max_data_dict_size(num_files, node_counts, max_pool_frac=0.5)
@@ -108,7 +106,7 @@ if __name__ == "__main__":
     logger.info(f"Setting sim_dict size to {sim_dict_mem} GB")
     logger.info(f"Setting model_list_dict size to {model_list_dict_mem} GB")
 
-      # Check if total memory required exceeds available memory
+    # Check if total memory required exceeds available memory
     if data_dict_mem + sim_dict_mem + model_list_dict_mem > tot_mem:
         logger.info(f"Sum of dictionary sizes exceed total mem: {data_dict_mem=} {sim_dict_mem=} {model_list_dict_mem=} {tot_mem=}")
         raise Exception("Not enough memory for DDicts")
@@ -125,9 +123,6 @@ if __name__ == "__main__":
     logger.info(f"Launched Dragon Dictionary for docking simulation with total memory size {sim_dict_mem} on {num_tot_nodes} nodes")
     model_list_dd = DDict(args.managers_per_node, num_tot_nodes, model_list_dict_mem, working_set_size=10, wait_for_keys=True)
     logger.info(f"Launched Dragon Dictionary for model list with total memory size {model_list_dict_mem} on {num_tot_nodes} nodes")
-
-
-
     
     # Launch the data loader component
     max_procs = args.max_procs_per_node*num_tot_nodes
@@ -170,6 +165,13 @@ if __name__ == "__main__":
     logger.info(f"# {num_keys=}")
     logger.info(f"# {num_files=}")
     
+    logger.debug("Here are the data DDict stats after data loading...")
+    for stat in data_dd.stats:
+        logger.debug(f"manager_ID={stat.manager_id}, "+
+                f"host_name={stat.hostname}, "+
+                f"num_keys={stat.num_keys}, "+
+                f"used_mem={stat.pool_utilization}, "+
+                f"total_mem={stat.total_bytes}")
     
     # Number of top candidates to produce
     # The number of top candidates is set to 1000 for small tests and 10000 for larger tests
@@ -181,6 +183,38 @@ if __name__ == "__main__":
     # Finished dictionary initialization
     logger.info("Finished initializing dictionaries")
 
+    # Set number of processes for each component
+    num_proc_sorting = 1 # this is the number of sorting instances, more processes can used by each instance
+    num_proc_training = 1
+    num_proc_inference = num_gpus * node_counts["inference"] - 1 # leave one gpu for training
+    num_proc_simulation = args.max_procs_per_node * node_counts["simulation"]
+    num_proc_simulation = min(num_proc_simulation, top_candidate_number//8)
+    num_proc_simulation = max(num_proc_simulation, node_counts["simulation"])
+
+
+    # Split threads not used by inference and training between sorting and simulation
+    available_threads = get_available_threads()
+    #logger.info(f"Available threads for simulation and sorting: {available_threads}")
+    print(f"{len(available_threads)=}", flush=True)
+
+    # Allocate 1 thread per node for sorting
+    sorting_threads = [available_threads[0]]
+
+    # Distribute remaining threads to simulations
+    available_threads = available_threads[1:]
+    spacing = len(available_threads)//(num_proc_simulation//node_counts["simulation"])
+    print(f"Spacing for simulation threads: {spacing}", flush=True)
+    print(f"{num_proc_simulation=}", flush=True)
+    simulation_threads = available_threads[::spacing][:num_proc_simulation]
+    num_proc_simulation = len(simulation_threads)*node_counts["simulation"]
+
+    logger.info(f"{num_proc_inference=}")
+    logger.info(f"{num_proc_simulation=}")
+    logger.info(f"{num_proc_sorting=}")
+    logger.info(f"{num_proc_training=}")
+
+    logger.info(f"Number of sorting threads: {len(sorting_threads)}")
+    logger.info(f"Number of simulation threads: {len(simulation_threads)}")
 
     # New model event for training
     new_model_event = mp.Event()
@@ -189,21 +223,19 @@ if __name__ == "__main__":
     continue_event = mp.Event()
     continue_event.set()
 
-    # sychronization barrier for inference processes and training
-    num_procs = num_gpus*node_counts["inference"]
-    barrier = mp.Barrier(parties=num_procs) # num_procs -1 for inference + 1 for training = num_procs
-
+    # sychronization barrier for dictionary checkpoints
+    num_parties = num_proc_simulation + num_proc_training + num_proc_inference + num_proc_sorting
+    barrier = mp.Barrier(parties=num_parties) 
+    logger.info(f"Barrier for new model created with {num_parties} parties")
     logger.info(f"Current checkpoint: {model_list_dd.checkpoint_id}")
 
     # Launch the data inference component
-    
-    logger.info(f"Launching inference with {num_procs} processes ...")
+    logger.info(f"Launching inference with {num_proc_inference} processes ...")
+    inf_num_limit = None
     if num_tot_nodes < 3:
         inf_num_limit = 8
         logger.info(f"Running small test on {num_tot_nodes}; limiting {inf_num_limit} keys per inference worker")
-    else:
-        inf_num_limit = None
-
+    
     tic = perf_counter()
     inf_proc = mp.Process(
         target=launch_inference,
@@ -211,7 +243,7 @@ if __name__ == "__main__":
             data_dd,
             model_list_dd,
             nodelists["inference"],
-            num_procs,
+            num_proc_inference+1,
             inf_num_limit,
             continue_event,
             new_model_event,
@@ -230,25 +262,28 @@ if __name__ == "__main__":
                                     top_candidate_number,
                                     args.max_procs_per_node,
                                     nodelists['sorting'],
+                                    sorting_threads,
                                     model_list_dd,
                                     random_number_fraction,
+                                    args.max_iter, # number of model retrainings
                                     continue_event,
-                                    ),
+                                    new_model_event,
+                                    barrier,),
                                 )
     sorter_proc.start()
 
 #     # Launch Docking Simulations
     logger.info(f"Launched Docking Simulations")
-    num_procs = args.max_procs_per_node * node_counts["simulation"]
-    num_procs = min(num_procs, top_candidate_number//4)
-    num_procs = max(num_procs, node_counts["simulation"])
     dock_proc = mp.Process(
         target=launch_docking_sim,
         args=(sim_dd, 
             model_list_dd, 
-            num_procs, 
-            nodelists["simulation"], 
-            continue_event,),
+            num_proc_simulation, 
+            nodelists["simulation"],
+            simulation_threads,
+            continue_event,
+            new_model_event,
+            barrier),
     )
     dock_proc.start()
     
@@ -257,7 +292,7 @@ if __name__ == "__main__":
     logger.info(f"Launched Fine Tune Training")
     tic = perf_counter()
     BATCH = 64
-    EPOCH = 500
+    EPOCH = 150
     train_proc = mp.Process(
         target=launch_training,
         args=(

@@ -23,6 +23,7 @@ import traceback
 
 from data_loader.data_loader_presorted import load_inference_data, initialize_worker
 from logging_config import sort_logger as logger
+from logging_config import driver_logger
 
 
 MAX_BRANCHING_FACTOR = 5
@@ -128,38 +129,41 @@ def save_top_candidates_list(candidate_dict):
             f.writelines(lines)
 
 
+
 def sort_controller(
     dd,
     top_candidate_number: int,
     max_procs: int,
     nodelist: list,
+    thread_list: list,
     model_list_dd,
     random_number_fraction,
+    max_iter=10,
     continue_event=None,
-    checkpoint_interval_min=2,
+    new_model_event=None,
+    barrier=None,
+    checkpoint_interval_min=1,
 ):
 
-    iter = 0
+    sequential_workflow = continue_event is None
     
     logger.info("Starting Sort Controller")
     logger.info(f"Sorting for {top_candidate_number} candidates")
 
-    ckeys = model_list_dd.keys()
-    if "current_sort_iter" not in ckeys:
-        model_list_dd.bput("current_sort_iter", -1)
+    # For asynchronous workflow, wait for checkpoint interval before starting
+    if not sequential_workflow:
+        time.sleep(checkpoint_interval_min * 60)
 
     continue_flag = True
-
+    sorting_iter = 0
     while continue_flag:
 
-        # Wait for sort interval
-        if continue_event is not None:
-            time.sleep(checkpoint_interval_min * 60)
+        checkpoint_id = model_list_dd.checkpoint_id
 
-        logger.info(f"Starting iter {iter}")
+        logger.info(f"Sorting on checkpoint {checkpoint_id} and iteration {sorting_iter}")
 
-        model_list_dd.sync_to_newest_checkpoint()
-        logger.info(f"Model list dictionary synced to newest checkpoint id {model_list_dd.checkpoint_id}")
+        #model_list_dd.sync_to_newest_checkpoint()
+        #logger.info(f"Model list dictionary synced to newest checkpoint id {model_list_dd.checkpoint_id}")
         tic = perf_counter()
 
         random_number = int(random_number_fraction*top_candidate_number)
@@ -167,11 +171,12 @@ def sort_controller(
         if os.getenv("USE_MPI_SORT"):
             logger.info("Using MPI sort")
             max_sorter_procs = max_procs*len(nodelist)
-            sorter_proc = mp.Process(target=sort_dictionary_pg, 
+            sorter_proc = mp.Process(target=distributed_mpi_sort, 
                                     args=(dd,
                                         top_candidate_number,
                                         max_sorter_procs, 
                                         nodelist,
+                                        thread_list,
                                         model_list_dd,
                                         random_number,
                                         ),
@@ -180,29 +185,42 @@ def sort_controller(
             sorter_proc.join()
         else:
             logger.info("Using filter sort")
-    #TODO: pass in checkpoint id to sorting
             sorter_proc = mp.Process(target=sort_dictionary,
                                     args=(
                                             dd,
                                             top_candidate_number,
                                             model_list_dd,
+                                            random_number,
                                             ),
                                     )
             sorter_proc.start()
             sorter_proc.join()
-        # if sorter_proc.exitcode != 0:
-        #     raise Exception("Sorting failed\n")
 
-        if continue_event is not None:
-            if iter > 10: continue_event.clear()
+        if not sequential_workflow:
+            if checkpoint_id > max_iter: 
+                continue_event.clear()
+                driver_logger.info(f"Clearing continue_event after 3 checkpoints for testing purposes")
             continue_flag = continue_event.is_set()
         else:
             continue_flag = False
+
+        sorting_iter += 1
+        # Make checkpoint decision
+        if sequential_workflow:
+            # Checkpoint on every iteration for sequential workflow
+            model_list_dd.checkpoint()
+        else:
+            if new_model_event.is_set():
+                model_list_dd.checkpoint()
+                checkpoint_id = model_list_dd.checkpoint_id
+                driver_logger.info(f"Sort controller waiting at barrier on {sorting_iter=} and {checkpoint_id=}...")
+                barrier.wait()
+                logger.info(f"Sort controller advanced to checkpoint {model_list_dd.checkpoint_id}")
     
 
 
 #TODO: pass in checkpoint_id
-def get_largest(dd, out_queue, num_return_sorted):
+def get_largest(dd, out_queue, num_return_sorted, checkpoint_id):
     # get num_return_sorted values from the manager
     # reflected in dd (i.e. dd is a manager directed
     # subset of a ddict).
@@ -215,6 +233,9 @@ def get_largest(dd, out_queue, num_return_sorted):
         for key in keys:
             if "model" not in key and "iter" not in key:
                 val = dd[key]
+                # Skip values from models before checkpoint_id
+                if val['model_iter'] < checkpoint_id:
+                    continue
                 num_smiles = len(val['inf'])
                 this_value.extend(zip(val["inf"], 
                                         val["smiles"], 
@@ -244,14 +265,15 @@ def comparator(x, y):
     return x[0] > y[0]
 
 
-def sort_dictionary(dd: DDict, num_return_sorted, cdd: DDict):
+def sort_dictionary(dd: DDict, num_return_sorted, cdd: DDict, random_number: int):
     
     tic_start = perf_counter()
     logger.info(f"Finding the best {num_return_sorted} candidates.")
+    checkpoint_id = cdd.checkpoint_id
     candidate_list = []
 
     tic_filter = perf_counter()
-    with dd.filter(get_largest, (num_return_sorted,), comparator, branching_factor=4) as candidates:
+    with dd.filter(get_largest, (num_return_sorted, checkpoint_id,), comparator, branching_factor=4) as candidates:
         for candidate in candidates:
             candidate_list.append(candidate)
             if len(candidate_list) == num_return_sorted:
@@ -268,27 +290,19 @@ def sort_dictionary(dd: DDict, num_return_sorted, cdd: DDict):
                 "smiles": list(candidate_smiles), 
                 "model_iter": list(candidate_model_iter)}
 
-    current_sort_iter = cdd.bget("current_sort_iter")
-    if current_sort_iter > -1:
-        current_sort_list = cdd.bget("current_sort_list")
-        cdd[str(current_sort_iter)] = current_sort_list 
-
-    new_sort_iter = int(current_sort_iter + 1)
-    cdd.bput("current_sort_iter", new_sort_iter)
+    current_sort_iter = cdd.checkpoint_id
+    
     tic_w = perf_counter()
     cdd.bput("current_sort_list", sort_val)
     toc_w = perf_counter()
     toc_end = perf_counter()
 
     logger.info(f"Finished filter sort")
-    #cdd[ckey] = sort_val
-    #cdd["sort_iter"] = int(ckey)
-    #cdd["max_sort_iter"] = ckey
 
     io_time =(toc_w-tic_w)
     filter_time = toc_filter - tic_filter
 
-    print(f"Performed sorting of {num_return_sorted} compounds: total={toc_end-tic_start}, filter={filter_time}, IO={io_time}",flush=True)
+    logger.info(f"Performed sorting of {num_return_sorted} compounds: total={toc_end-tic_start}, filter={filter_time}, IO={io_time}")
 
     if random_number > 0:
         print(f"Adding {random_number} random candidates to training", flush=True)
@@ -364,10 +378,11 @@ def make_random_compound_selection(random_number):
     return random_selection
 
 
-def sort_dictionary_pg(dd: DDict, 
+def distributed_mpi_sort(dd: DDict, 
                        num_return_sorted: int, 
                        num_procs: int, 
-                       nodelist, cdd: DDict, 
+                       nodelist, cdd: DDict,
+                       thread_list: list,
                        random_number):
    
     max_num_procs_pn = num_procs//len(nodelist)
@@ -382,6 +397,9 @@ def sort_dictionary_pg(dd: DDict,
 
     direct_sort_num = max(num_keys//num_procs+1,min_direct_sort_num)
     num_procs_pn = keys_per_node // direct_sort_num
+
+    spacing = len(thread_list)//num_procs_pn
+    thread_list = thread_list[::spacing][:num_procs_pn]
     
     logger.info(f"Direct sorting {direct_sort_num} keys per process")
 
@@ -393,9 +411,7 @@ def sort_dictionary_pg(dd: DDict,
         node_name = Node(node).hostname
         local_policy = Policy(placement=Policy.Placement.HOST_NAME, 
                             host_name=node_name, 
-                            cpu_affinity=list(range(0, 
-                                                    max_num_procs_pn, 
-                                                    max_num_procs_pn//num_procs_pn)))
+                            cpu_affinity=thread_list,)
         grp.add_process(nproc=num_procs_pn, 
                             template=ProcessTemplate(target=mpi_sort, 
                                                     args=(dd, num_keys, num_return_sorted,cdd), 

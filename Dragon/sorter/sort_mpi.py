@@ -15,6 +15,7 @@ def mpi_sort(_dict: DDict, num_keys: int, num_return_sorted: int, candidate_dict
     size = comm.Get_size()
     rank = comm.Get_rank()
         
+    checkpoint_id = candidate_dict.checkpoint_id
     #print(f"Sort rank {rank} has started",flush=True)
     if rank == 0: logger.info(f"MPI Sorting starting on {size} ranks")
     
@@ -98,6 +99,9 @@ def mpi_sort(_dict: DDict, num_keys: int, num_return_sorted: int, candidate_dict
     for i,key in enumerate(my_key_list):
         #print(f"Sort rank {rank} getting key {key} on iter {i}",flush=True)
         val = _dict[key]
+        # Skip values from models before checkpoint_id
+        if val['model_iter'] < checkpoint_id:
+            continue
         #print(f"Sort rank {rank} finished getting key {key} on iter {i}",flush=True)
 
         # Only include this key if it has non-zero inf values
@@ -226,13 +230,17 @@ def mpi_sort(_dict: DDict, num_keys: int, num_return_sorted: int, candidate_dict
             logger.info(f"Sorted list contains {non_zero_infs} non-zero inference results out of {len(candidate_inf)}")
             sort_val = {"inf": list(candidate_inf), "smiles": list(candidate_smiles), "model_iter": list(candidate_model_iter)}
         
-            save_list(candidate_dict, current_sort_iter+1, sort_val)    
+            save_list(candidate_dict, current_sort_iter+1, sort_val, logger)    
     #print(f"Rank {rank} done",flush=True)
     MPI.Finalize()
     
     return
 
-def save_list(candidate_dict, ckey, sort_val):
+def save_list(candidate_dict, ckey, sort_val, logger):
+
+    logger.info("HERE IS THE CANDIDATE LIST (first 10 only)")
+    logger.info("******************************************")
+    logger.info(sort_val[:10])
     candidate_dict.bput("current_sort_list", sort_val)
     candidate_dict.bput("current_sort_iter", ckey)
     logger.info(f"candidate dictionary on iter {int(ckey)} and saved")

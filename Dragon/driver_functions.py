@@ -1,4 +1,5 @@
 import logging
+import os
 from dragon.data.ddict import DDict
 from dragon.native.machine import System, Node
 from logging_config import driver_logger as logger
@@ -86,6 +87,36 @@ def max_data_dict_size(num_keys: int,
 
     return int(data_dict_size), int(sim_dict_size), int(model_dict_size)
 
+def get_available_threads(sequential_workflow=False):
+    cpu_affinity_string = os.getenv("CPU_AFFINITY")
+    cores_per_node = int(os.getenv("CORES_PER_NODE"))
+    threads_per_core = int(os.getenv("THREADS_PER_CORE"))
+    skip_threads_string = os.getenv("SKIP_THREADS")
+    skip_threads = [int(t) for t in skip_threads_string.split(',')] if skip_threads_string else []
+
+    gpu_bound_threads = []
+    if not sequential_workflow:
+        affinity_strings = cpu_affinity_string.split(":")[1:]
+        for aff_str in affinity_strings:
+            thread_ranges = aff_str.split(",")
+            for tr in thread_ranges:
+                t = tr.split("-")
+                if len(t) == 1:
+                    gpu_bound_threads.append(int(t[0]))
+                else:
+                    start = int(t[0])
+                    end = int(t[1])
+                    for th in range(start, end+1):
+                        gpu_bound_threads.append(th)
+    logger.info(f"Threads bound to GPUS: {gpu_bound_threads}")
+    logger.info(f"Number of threads bound to GPUS: {len(gpu_bound_threads)}")
+    available_threads = []
+    for t in range(threads_per_core*cores_per_node):
+        if t not in gpu_bound_threads and t not in skip_threads:
+            available_threads.append(t)
+    logger.info(f"Threads not bound to GPUS: {available_threads}")
+    logger.info(f"Number of threads not bound to GPUS: {len(available_threads)}")
+    return available_threads
 
 def ddict_mem_check(mem_fraction=0.5):
 

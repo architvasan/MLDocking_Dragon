@@ -165,8 +165,6 @@ def prep_text(texts, tokenizer, max_sequence_length):
     return sequence.pad_sequences(text_sequences, maxlen=max_sequence_length) # pad all sequences so they all have same length
 
 
-#def train_val_data(data_path_train, data_path_vali, hvd_switch, vocab_size, maxlen):
-
 def preprocess_smiles_pair_encoding(data, maxlen, vocab_file, spe_file):
     # some default tokens from huggingface
     default_toks = ['[PAD]', 
@@ -205,7 +203,8 @@ def assemble_docking_data_top(sim_dd):
     # top_smiles = top_val["smiles"]
 
     # Here grab all simulated smiles instead of just top ones
-    top_smiles = sim_dd.bget('simulated_compounds')
+    top_smiles = list(sim_dd.keys()) #sim_dd.bget('simulated_compounds')
+    logger.debug(f"{top_smiles=}")
 
     train_smiles = []
     train_scores = []
@@ -233,6 +232,9 @@ def train_val_data(sim_dd,validation_fraction=0.2,method="random"):
     assert method in ["random","stratified"], "The sampling method must be random or stratified"
     tic = perf_counter()
     smiles, scores = assemble_docking_data_top(sim_dd)
+    if len(smiles) == 0:
+        logger.info(f"There are 0 simulations to train on")
+        return [], [], [], []
     ddict_time = perf_counter() - tic
     if method == "random":  
         data = list(zip(smiles,scores))
@@ -299,7 +301,7 @@ def train_val_data(sim_dd,validation_fraction=0.2,method="random"):
                                                         spe_file)
         #print(f"xtrain: {x_train}",flush=True)
         
-        return x_train, y_train, x_val, y_val, ddict_time
+        return x_train, y_train, x_val, y_val
     else:
         return [], [], [], []
   

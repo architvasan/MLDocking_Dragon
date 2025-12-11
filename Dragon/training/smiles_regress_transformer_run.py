@@ -1,14 +1,3 @@
-# import tensorflow as tf
-# from tensorflow import keras
-# from tensorflow.keras import backend as K
-# from tensorflow.keras import layers
-# from tensorflow.keras.callbacks import (
-#     CSVLogger,
-#     EarlyStopping,
-#     ModelCheckpoint,
-#     ReduceLROnPlateau,
-# )
-
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.preprocessing import sequence, text
 import logging
@@ -22,7 +11,7 @@ import intel_extension_for_tensorflow as itex
 import dragon
 from dragon.data.ddict.ddict import DDict
 from logging_config import train_logger as logger
-
+from logging_config import stdout_to_logger, driver_logger
 
 def continue_training(continue_event, training_iter):
     if continue_event is None:
@@ -43,7 +32,7 @@ def fine_tune(model_list_dd: DDict,
                 save_model=True,
                 list_poll_interval_sec=60):
 
-    fine_tune_log = f"training_{iter}.log"
+
     tic_start = perf_counter()
 
     prev_top_candidates = []
@@ -53,21 +42,21 @@ def fine_tune(model_list_dd: DDict,
         try:
             current_sort_list = model_list_dd.bget("current_sort_list")
             top_candidates = current_sort_list['smiles']
+            simulated_compounds = model_list_dd.bget("simulated_compounds")
         except:
             top_candidates = []
 
         logger.info(f"current_sort_list has {len(top_candidates)} candidates")
         
-        if top_candidates == prev_top_candidates:
-            prev_top_candidates = top_candidates.copy()
+        if top_candidates == prev_top_candidates or len(simulated_compounds) < len(top_candidates):
+            # Sleep if the top candidates have not changed or there are too few simulations
+            logger.info("No new candidates to train on, waiting...")
             time.sleep(list_poll_interval_sec)
         else:
             ######## Build model #############
-            prev_top_candidates = top_candidates.copy()
-
-            if len(top_candidates) <= 10:
-                logger.info("Too few candidates to train, skipping this iteration")
-                logger.info(f"Current top candidates: {top_candidates}")
+            if len(simulated_compounds) < len(top_candidates):
+                logger.info("Too few simulations to train, skipping this iteration")
+                logger.info(f"Number of simulated compounds: {len(simulated_compounds)}")
                 training_iter += 1
                 continue
 
@@ -86,11 +75,15 @@ def fine_tune(model_list_dd: DDict,
             ######## Create callbacks #######
             callbacks = assemble_callbacks(hyper_params)
             
+            logger.info(f"There are {len(x_train)} simulations to train on")
             # Only train if there is new data
             if len(x_train) > 0:
+                prev_top_candidates = top_candidates.copy()
+                logger.info("Starting Training")
                 logger.info(f"{BATCH=} {EPOCH=} {len(x_train)=}")
                 
-                with open(fine_tune_log, 'a') as sys.stdout:
+                with stdout_to_logger(logger, level=logging.INFO):
+                    fit_tic = perf_counter()
                     history = model.fit(
                                 x_train,
                                 y_train,
@@ -100,25 +93,37 @@ def fine_tune(model_list_dd: DDict,
                                 validation_data=(x_val,y_val),
                                 callbacks=callbacks,
                             )
-                    print("model fitting complete")
-                sys.stdout = sys.__stdout__
-                logger.info("model fitting complete")
+                    fit_toc = perf_counter()
+                    #print("model fitting complete")
+                #sys.stdout = sys.__stdout__
+                logger.info(f"model fitting complete in {fit_toc-fit_tic} seconds")
                 
                 # Save to dictionary
+                # Retrieve simulated compounds to copy back after checkpointing
+                simulated_compounds = model_list_dd.bget("simulated_compounds")
+                # Checkpoint model/list dictionary
                 model_list_dd.checkpoint()
-                save_model_weights(model_list_dd, model)
                 model_iter = model_list_dd.checkpoint_id
+                logger.info(f"Model/List dictionary moved to checkpoint {model_iter}")
+                # Restore simulated compounds
+                model_list_dd.bput("simulated_compounds", simulated_compounds)
+                # Save model weights to dictionary
+                save_model_weights(model_list_dd, model)
                 logger.info(f"Saved model weights to dictionary {model_iter=}")
+                
+                # Write out model to file if desired
                 if save_model:
                     model_path = "current_model.keras"
                     model.save(model_path)
-                    logger.info(f"{model_iter=} {model_path=}")
+                    logger.info(f"Saving model: {model_iter=} {model_path=}")
                 logger.info("Saved fine tuned model to dictionary")
+
+                # Notify other processes of new model and wait for them to reach barrier
                 if new_model_event is not None:
                     new_model_event.set()
-                    logger.info("Setting new_model_event and waiting for barrier")
+                    driver_logger.info(f"Training setting new_model_event and waiting for barrier to advance to checkpoint")
                     barrier.wait()
-                    logger.info("Barrier passed, clearing new_model_event")
+                    driver_logger.info(f"Barrier passed, clearing new_model_event, progressing with model {model_iter}")
                     new_model_event.clear()
         training_iter += 1
             

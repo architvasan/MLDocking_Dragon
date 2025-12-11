@@ -55,12 +55,12 @@ def launch_training(model_list_dd: DDict,
     run_dir = os.getcwd()
 
     # Create the process group
-    gpu_devices = os.getenv("GPU_DEVICES").split(",")
-    gpu_devices = [float(gid) for gid in gpu_devices]
-    gpu_devices = [gpu_devices[0]] # training only needs 1 GPU
-    cpu_affinity = os.getenv("TRAIN_CPU_AFFINITY").split(",")
-    cpu_affinity = [int(cid) for cid in cpu_affinity]
-    print(f'Launching training on {cpu_affinity} CPUs and {gpu_devices} GPU',flush=True)
+    #gpu_devices = os.getenv("GPU_DEVICES").split(",")
+    #gpu_devices = [float(gid) for gid in gpu_devices]
+    #gpu_devices = [gpu_devices[0]] # training only needs 1 GPU
+    #cpu_affinity = os.getenv("TRAIN_CPU_AFFINITY").split(",")
+    #cpu_affinity = [int(cid) for cid in cpu_affinity]
+    #print(f'Launching training on {cpu_affinity} CPUs and {gpu_devices} GPU',flush=True)
     
     tic = perf_counter()
     global_policy = Policy(distribution=Policy.Distribution.BLOCK)
@@ -116,15 +116,14 @@ def launch_training(model_list_dd: DDict,
                                                 ))
     
     # Launch the ProcessGroup 
-    print(f"Starting Process Group for training",flush=True)
+    logger.info(f"Starting Process Group for training")
     grp.init()
     grp.start()
-    logger.info(f"Starting Process Group for Training")
+    logger.info(f"Training process group launched")
     
     grp.join()
     grp.close()
     toc = perf_counter()
-    logger.info(f"Training process group stopped in {toc-tic} seconds",flush=True)
-    #print(dd["model_iter"])
-    #print(dd["model"])
+    logger.info(f"Training process group stopped in {toc-tic} seconds")
+
 
