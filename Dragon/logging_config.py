@@ -1,6 +1,20 @@
+import os
 import sys
 import logging
 from contextlib import contextmanager
+os.environ['MLDOCKING_LOGGING_LEVEL'] = 'INFO'
+
+mldocking_logging_level = os.environ['MLDOCKING_LOGGING_LEVEL'] = 'INFO'
+if mldocking_logging_level == 'DEBUG':
+    log_level = logging.DEBUG
+elif mldocking_logging_level == 'INFO':
+    log_level = logging.INFO
+elif mldocking_logging_level == 'WARNING':
+    log_level = logging.WARNING
+elif mldocking_logging_level == 'ERROR':
+    log_level = logging.ERROR
+else:
+    log_level = logging.INFO
 
 # --- 1. Define the Logger Stream Handler ---
 class LoggerWriter:
@@ -55,11 +69,11 @@ def setup_logger(name, log_file, level=logging.DEBUG):
     return logger
 
 
-driver_logger = setup_logger('driver', None, level=logging.INFO)
-load_logger = setup_logger('loader', "data_loader.log", level=logging.INFO)
-inf_logger = setup_logger('inf', "inference.log", level=logging.INFO)
-sim_logger = setup_logger('sim', "simulation.log", level=logging.DEBUG)
-train_logger = setup_logger('train', "training.log", level=logging.INFO)
-sort_logger = setup_logger('sort', "sorting.log", level=logging.INFO)
+driver_logger = setup_logger('driver', None, level=log_level)
+load_logger = setup_logger('loader', "data_loader.log", level=log_level)
+inf_logger = setup_logger('inf', "inference.log", level=log_level)
+sim_logger = setup_logger('sim', "simulation.log", level=log_level)
+train_logger = setup_logger('train', "training.log", level=log_level)
+sort_logger = setup_logger('sort', "sorting.log", level=log_level)
 
 

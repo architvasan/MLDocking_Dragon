@@ -50,28 +50,20 @@ if __name__ == "__main__":
                         help='Maximum number of processes in a Pool')
     parser.add_argument('--max_iter', type=int, default=1,
                         help='Maximum number of iterations')
-    parser.add_argument('--dictionary_timeout', type=int, default=10,
-                        help='Timeout for Dictionary in seconds')
     parser.add_argument('--data_path', type=str, default="/lus/eagle/clone/g2/projects/hpe_dragon_collab/balin/ZINC-22-2D-smaller_files",
                         help='Path to pre-sorted SMILES strings to load')
-    parser.add_argument('--logging', type=str, default="info", choices=["info","debug"],
-                        help='Logging level')
     parser.add_argument('--load', type=str, default="False", choices=["False", "True"],
                         help='Perform data loading only')
     parser.add_argument('--inference_and_sort', type=str, default="False", choices=["False", "True"],
                         help='Perform loading, inference and sorting only')
     parser.add_argument('--sort', type=str, default="False", choices=["False", "True"],
                         help='Perform loading and sorting only')
-    parser.add_argument('--pool_chunksize', type=int, default=1,
-                        help='Chunksize to use for the data loader mp.Pool')
-    parser.add_argument('--candidate_fraction', type=float, default=0.0,
-                        help='Fraction of the compund list to inclide for training')
+    parser.add_argument('--num_files', type=int, default=128,
+                        help='Number of files to load')                 
     args = parser.parse_args()
 
     # Start driver
     start_time = perf_counter()
-    print("Begun dragon driver")
-    print(f"Reading inference data from path: {args.data_path}", flush=True)
     
     logger.info("Begun dragon driver")
     logger.info(f"Reading inference data from path: {args.data_path}")
