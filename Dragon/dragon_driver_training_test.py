@@ -99,7 +99,7 @@ if __name__ == "__main__":
     cand_dd = DDict(args.managers_per_node, num_dict_nodes, candidate_dict_mem, policy=None, trace=True)
     print(f"Launched Dragon Dictionary for top candidates with total memory size {candidate_dict_mem}", flush=True)
     print(f"on {num_dict_nodes} nodes", flush=True)
-    cand_dd['simulated_compounds'] = []
+    cand_dd.bput('simulated_compounds', [])
 
     # Load test simulation data
     with open(f"{driver_path}/training/training_test.data", "r") as f:
@@ -115,7 +115,7 @@ if __name__ == "__main__":
             dock_score = float(line_list[1])
             cand_dd[smiles] = {'dock_score': dock_score}
             simulated_compounds.append(smiles)
-        cand_dd['simulated_compounds'] = simulated_compounds
+        cand_dd.bput('simulated_compounds', simulated_compounds)
     
     # Run training module
     print(f"Launched Fine Tune Training", flush=True)

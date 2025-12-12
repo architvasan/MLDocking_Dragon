@@ -13,7 +13,7 @@ from dragon.data.ddict import DDict
 from dragon.native.machine import System, Node
 from dragon.infrastructure.policy import Policy
 
-from data_loader.data_loader_presorted import load_inference_data
+from data_loader.data_loader_presorted import load_inference_data, get_files
 from sorter.sorter import sort_dictionary_pg
 from data_loader.data_loader_presorted import get_files
 #from inference.launch_inference import launch_inference
@@ -47,6 +47,10 @@ if __name__ == "__main__":
     num_tot_nodes = int(alloc.nnodes)
     tot_nodelist = alloc.nodes
 
+    # Get info on the number of files
+    base_path = pathlib.Path(args.data_path)
+    files, num_files = get_files(base_path)
+
     # Start distributed dictionary and load data
     tot_mem = num_tot_nodes*args.mem_per_node
 
@@ -70,6 +74,7 @@ if __name__ == "__main__":
             args.data_path,
             max_procs,
             num_tot_nodes * args.managers_per_node,
+            num_files
         ),
     )
     loader_proc.start()

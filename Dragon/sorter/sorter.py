@@ -4,6 +4,7 @@ import os
 import random
 import gc
 import dragon
+import logging
 import multiprocessing as mp
 from dragon.data.ddict.ddict import DDict
 from dragon.native.process_group import ProcessGroup
@@ -20,197 +21,134 @@ import heapq
 import socket
 import traceback
 
+import intel_extension_for_tensorflow as itex
 from data_loader.data_loader_presorted import load_inference_data, initialize_worker
+from logging_config import sort_logger as logger
+from logging_config import driver_logger
 
 
 MAX_BRANCHING_FACTOR = 5
 
-global data_dict
-data_dict = None
 
-
-def init_worker(q):
-    global data_dict
-    data_dict = q.get()
-    return
-
-
-def filter_candidate_keys(ckeys: list):
-    ckeys = [
-        key for key in ckeys if "iter" not in key and key[0] != "d" and key[0] != "l"
-    ]
-    return ckeys
-
-
-def compare_candidate_results(
-    candidate_dict,
-    continue_event,
-    num_return_sorted,
-    ncompare=3,
-    max_iter=100,
-    purge=True,
-):
-
-    print(f"Comparing Candidate Lists")
-    end_workflow = False
-    candidate_keys = candidate_dict.keys()
-    sort_iter = 0
-    if "sort_iter" in candidate_keys:
-        sort_iter = candidate_dict["sort_iter"]
-        # candidate_keys.remove('iter')
-    candidate_keys = filter_candidate_keys(candidate_keys)
-    print(f"{candidate_keys=}")
-    # ncompare = min(ncompare,len(candidate_keys))
-    candidate_keys.sort(reverse=True)
-    # print(f"{candidate_keys=}")
-    num_top_candidates = 0
-    if len(candidate_keys) > 0:
-        num_top_candidates = len(candidate_dict[candidate_keys[0]]["smiles"])
-
-    if sort_iter > max_iter:
-        # end if maximum number of iterations reached
-        end_workflow = True
-        print(
-            f"Ending workflow: sort_iter {sort_iter} exceeded max_iter {max_iter}",
-            flush=True,
-        )
-    elif len(candidate_keys) > ncompare and num_top_candidates == num_return_sorted:
-        # look for unique entries in most recent ncompare lists
-        # only do this if there are enough lists to compare and if enough candidates have been identified
-
-        not_in_common = []
-        model_iters = []
-        print(f"{candidate_dict=}", flush=True)
-        for i in range(ncompare):
-            for j in range(ncompare):
-                if i < j:
-                    ckey_i = candidate_keys[i]
-                    ckey_j = candidate_keys[j]
-                    not_in_common += list(
-                        set(candidate_dict[ckey_i]["smiles"])
-                        ^ set(candidate_dict[ckey_j]["smiles"])
-                    )
-                    model_iter_i = list(set(candidate_dict[ckey_i]["model_iter"]))
-                    model_iter_j = list(set(candidate_dict[ckey_j]["model_iter"]))
-                    model_iters += model_iter_i
-                    model_iters += model_iter_j
-        print(f"Number not in common {len(not_in_common)}")
-        # ncompare consecutive lists are identical, end workflow
-        print(f"{model_iters=}")
-
-        # End workflow if ncompare lists with unique model_iters are idententical
-        if len(not_in_common) == 0 and len(model_iters) == 2 * ncompare:
-            if len(set(model_iters)) == ncompare:
-                print(f"Ending workflow: {ncompare} lists identical", flush=True)
-                end_workflow = True
-
-        # If purge, only keep ncompare sorting lists
-        if purge:
-            if len(candidate_keys) > ncompare:
-                del candidate_dict[candidate_keys[-1]]
-
-    print(f"{end_workflow=}")
-    if end_workflow:
-        continue_event.clear()
-
-
-def save_top_candidates_list(candidate_dict):
-    ckeys = filter_candidate_keys(candidate_dict.keys())
-    if len(ckeys) > 0:
-        max_ckey = max(ckeys)
-        top_candidates = candidate_dict[max_ckey]
-        top_smiles = top_candidates["smiles"]
-        lines = [sm + "\n" for sm in top_smiles]
-
-        with open(f"top_candidates.out", "w") as f:
-            f.writelines(lines)
+def compare_candidate_results():
+    """Compare candidate results from different sorting iterations."""
+    # TODO: implement comparison logic to determine model improvement and convergence
+    pass
 
 
 def sort_controller(
     dd,
-    num_return_sorted: str,
+    top_candidate_number: int,
     max_procs: int,
     nodelist: list,
-    candidate_dict,
-    continue_event,
-    checkpoint_interval_min=10,
+    thread_list: list,
+    model_list_dd,
+    random_number_fraction,
+    max_iter=10,
+    #continue_event=None,
+    stop_event=None,
+    new_model_event=None,
+    barrier=None,
+    checkpoint_interval_sec=60,
 ):
 
-    iter = 0
-    with open("sort_controller.log", "a") as f:
-        f.write(f"{datetime.datetime.now()}: Starting Sort Controller\n")
-        f.write(
-            f"{datetime.datetime.now()}: Sorting for {num_return_sorted} candidates\n"
-        )
+    sequential_workflow = stop_event is None
+    
+    logger.info("Starting Sort Controller")
+    logger.info(f"Sorting for {top_candidate_number} candidates")
 
-    ckeys = candidate_dict.keys()
-    if "max_sort_iter" not in ckeys:
-        candidate_dict["max_sort_iter"] = "-1"
-
-    check_time = perf_counter()
+    # For asynchronous workflow, wait for checkpoint interval before starting
+    if not sequential_workflow:
+        time.sleep(checkpoint_interval_sec)
 
     continue_flag = True
-
+    sorting_iter = 0
     while continue_flag:
-        gc.collect()
 
-        with open("sort_controller.log", "a") as f:
-            f.write(f"{datetime.datetime.now()}: Starting iter {iter}\n")
+        checkpoint_id = model_list_dd.checkpoint_id
+
+        logger.info(f"Sorting on checkpoint {checkpoint_id} and iteration {sorting_iter}")
+
+        #model_list_dd.sync_to_newest_checkpoint()
+        #logger.info(f"Model list dictionary synced to newest checkpoint id {model_list_dd.checkpoint_id}")
         tic = perf_counter()
-        print(f"Sort iter {iter}", flush=True)
-        # sort_dictionary_queue(_dict, num_return_sorted, max_procs, key_list, candidate_dict)
-        # sort_dictionary_pool(_dict, num_return_sorted, max_procs, key_list, candidate_dict)
-        sort_dictionary_pg(dd, num_return_sorted, max_procs, nodelist, candidate_dict)
-        print(f"Finished pg sort", flush=True)
-        # dd["sort_iter"] = iter
-        # max_ckey = candidate_dict["max_sort_iter"]
-        # inf_results = candidate_dict[max_ckey]["inf"]
-        # cutoff_check = [p for p in inf_results if p < 9 and p > 0]
-        # print(f"Cutoff check: {len(cutoff_check)} inf vals below cutoff")
-        compare_candidate_results(
-            candidate_dict, continue_event, num_return_sorted, max_iter=50
-        )
 
-        if (check_time - perf_counter()) / 60.0 > checkpoint_interval_min:
-            save_top_candidates_list(candidate_dict)
-            check_time = perf_counter()
-        toc = perf_counter()
-        with open("sort_controller.log", "a") as f:
-            f.write(f"{datetime.datetime.now()}: iter {iter}: sort time {toc-tic} s\n")
-        iter += 1
+        random_number = int(random_number_fraction*top_candidate_number)
+        logger.info(f"Adding {random_number} random candidates to training")
+        if os.getenv("USE_MPI_SORT"):
+            logger.info("Using MPI sort")
+            max_sorter_procs = max_procs*len(nodelist)
+            sorter_proc = mp.Process(target=distributed_mpi_sort, 
+                                    args=(dd,
+                                        top_candidate_number,
+                                        max_sorter_procs, 
+                                        nodelist,
+                                        thread_list,
+                                        model_list_dd,
+                                        random_number,
+                                        ),
+                                    )
+            sorter_proc.start()
+            sorter_proc.join()
+        else:
+            logger.info("Using filter sort")
+            sorter_proc = mp.Process(target=sort_dictionary,
+                                    args=(
+                                            dd,
+                                            top_candidate_number,
+                                            model_list_dd,
+                                            random_number,
+                                            ),
+                                    )
+            sorter_proc.start()
+            sorter_proc.join()
 
-        if continue_event is None:
+        sorting_iter += 1
+        # Make checkpoint decision
+        if sequential_workflow:
             continue_flag = False
         else:
-            continue_flag = continue_event.is_set()
-    if continue_event is not None:
-        ckeys = candidate_dict.keys()
-        print(f"final {ckeys=}")
-        save_top_candidates_list(candidate_dict)
-    # ckeys = filter_candidate_keys(ckeys)
-    # if len(ckeys) > 0:
-    #     ckey_max = max(ckeys)
-    #     print(f"top candidates = {candidate_dict[ckey_max]}")
+            if new_model_event.is_set():
+                model_list_dd.checkpoint()
+                checkpoint_id = model_list_dd.checkpoint_id
+                driver_logger.info(f"Sort controller waiting at barrier on {sorting_iter=} and {checkpoint_id=}...")
+                barrier.wait()
+                logger.info(f"Sort controller advanced to checkpoint {model_list_dd.checkpoint_id}")
+                
+                # Check whether to continue async workflow
+                # if checkpoint_id > max_iter: 
+                #     continue_event.clear()
+                #     driver_logger.info(f"Clearing continue_event after {max_iter} checkpoints for testing purposes")
+                continue_flag = not stop_event.is_set()
 
+                # For asynchronous workflow, wait for checkpoint interval before sorting with new inference results
+                if not sequential_workflow and continue_flag:
+                    time.sleep(checkpoint_interval_sec)
+        
 
-def get_largest(dd, out_queue, num_return_sorted):
+def get_largest(dd, out_queue, num_return_sorted, checkpoint_id):
     # get num_return_sorted values from the manager
     # reflected in dd (i.e. dd is a manager directed
     # subset of a ddict).
     try:
+        tic = perf_counter()
         keys = dd.keys()
-        keys = [k for k in keys if "model" not in k and "iter" not in k]
+        #keys = [k for k in keys if "model" not in k and "iter" not in k]
         this_value = []
 
         for key in keys:
-            val = dd[key]
-            num_smiles = len(val['inf'])
-            this_value.extend(zip(val["inf"], 
-                                  val["smiles"], 
-                                  [val['model_iter'] for _ in range(num_smiles)]))
-            this_value = heapq.nlargest(
-                num_return_sorted, this_value, key=lambda x: x[0]
-            )
+            if "model" not in key and "iter" not in key:
+                val = dd[key]
+                # Skip values from models before checkpoint_id
+                if val['model_iter'] < checkpoint_id:
+                    continue
+                num_smiles = len(val['inf'])
+                this_value.extend(zip(val["inf"], 
+                                        val["smiles"], 
+                                        [val['model_iter'] for _ in range(num_smiles)]))
+                this_value = heapq.nlargest(
+                    num_return_sorted, this_value, key=lambda x: x[0]
+                )
 
         # If EOFError is raised, the receiving side closed the queue
         try:
@@ -218,6 +156,10 @@ def get_largest(dd, out_queue, num_return_sorted):
                 out_queue.put(this_value[i])
         except EOFError:
             pass
+        except IndexError:
+            pass
+
+        #print(perf_counter()-tic,flush=True)
 
     except Exception as ex:
         tb = traceback.format_exc()
@@ -231,32 +173,76 @@ def comparator(x, y):
     return x[0] > y[0]
 
 
-def sort_dictionary(dd: DDict, num_return_sorted, cdd: DDict):
-
-    print(f"Finding the best {num_return_sorted} candidates.", flush=True)
+def sort_dictionary(dd: DDict, num_return_sorted, cdd: DDict, random_number: int):
+    
+    tic_start = perf_counter()
+    logger.info(f"Finding the best {num_return_sorted} candidates.")
+    checkpoint_id = cdd.checkpoint_id
     candidate_list = []
 
-    with dd.filter(get_largest, (num_return_sorted,), comparator) as candidates:
+    tic_filter = perf_counter()
+    with dd.filter(get_largest, (num_return_sorted, checkpoint_id,), comparator, branching_factor=4) as candidates:
         for candidate in candidates:
             candidate_list.append(candidate)
             if len(candidate_list) == num_return_sorted:
                 break
+    toc_filter = perf_counter()
 
-    print("HERE IS THE CANDIDATE LIST (first 10 only)")
-    print("******************************************", flush=True)
-    print(candidate_list[:10], flush=True)
+    if len(candidate_list) == 0:
+        logger.info(f"No candidates found for sorting")
+        return
 
-    last_list_key = cdd["max_sort_iter"]
-    ckey = str(int(last_list_key) + 1)
+    logger.info("HERE IS THE CANDIDATE LIST (first 10 only)")
+    logger.info("******************************************")
+    logger.info(candidate_list[:10])
 
     candidate_inf,candidate_smiles,candidate_model_iter = zip(*candidate_list)
     non_zero_infs = len([cinf for cinf in candidate_inf if cinf != 0])
     sort_val = {"inf": list(candidate_inf), 
                 "smiles": list(candidate_smiles), 
                 "model_iter": list(candidate_model_iter)}
-    cdd[ckey] = sort_val
-    cdd["sort_iter"] = int(ckey)
-    cdd["max_sort_iter"] = ckey
+
+    current_sort_iter = cdd.checkpoint_id
+    
+    tic_w = perf_counter()
+    cdd.bput("current_sort_list", sort_val)
+    toc_w = perf_counter()
+    toc_end = perf_counter()
+
+    logger.info(f"Finished filter sort")
+
+    io_time =(toc_w-tic_w)
+    filter_time = toc_filter - tic_filter
+
+    logger.info(f"Performed sorting of {num_return_sorted} compounds: total={toc_end-tic_start}, filter={filter_time}, IO={io_time}")
+
+    if random_number > 0:
+        print(f"Adding {random_number} random candidates to training", flush=True)
+        num_procs = min(len(nodelist), random_number)
+        random_num_per_proc = max(int(random_number/num_procs), 1)
+        print(f"Starting a pool with {num_procs} processes each adding {random_num_per_proc} random candidates", flush=True)
+        pool = mp.Pool(num_procs, 
+                    initializer=initialize_worker, 
+                    initargs=(dd,), 
+                    )
+        out = pool.imap_unordered(make_random_compound_selection, 
+                                [random_num_per_proc for _ in range(num_procs)])
+
+        random_smiles = []
+        random_inf = []
+        random_model = []
+        for result in out:
+            for r in result:
+                sm,sc,mi = r
+                random_smiles.append(sm)
+                random_inf.append(sc)
+                random_model.append(mi)
+        pool.close()
+        pool.join()
+        print(f"Randomly sampled {len(random_smiles)} random smiles for simulation", flush=True)
+        cdd['random_compound_sample'] = {'smiles': random_smiles,
+                                        'inf': random_inf,
+                                        'model_iter': random_model,}
     
 
 def make_random_compound_selection(random_number):
@@ -265,46 +251,50 @@ def make_random_compound_selection(random_number):
         me = mp.current_process()
         dd = me.stash["ddict"]
 
-        alloc = System()
-        num_tot_nodes = int(alloc.nnodes) 
-        num_random_per_node = max(int(random_number/num_tot_nodes), 1)
+        #alloc = System()
+        #num_tot_nodes = int(alloc.nnodes) 
+        #num_random_per_node = max(int(random_number/num_tot_nodes), 1)
+        num_random_per_node = random_number
+
 
         random_selection = []
 
         # Select num_random_per_node random keys
-        current_host = host_id()
-        manager_nodes = dd.manager_nodes
-        key_list = []
-        for i in range(len(manager_nodes)):
-            if manager_nodes[i].h_uid == current_host:
-                dm = dd.manager(i)
-                key_list.extend(dm.keys())
-                # Filter out keys containing model or iter info
-                key_list = [key for key in key_list if "model" not in key and "iter" not in key]
-       
-        irand = [random.randint(0, len(key_list)-1) for _ in range(num_random_per_node)]
-        
-        for i,k in enumerate(key_list):
-            frequency = irand.count(i)
-            if frequency > 0:
-                val = dd[k]
-                smiles = val['smiles']
-                inf_val = val['inf']
-                model_iter = val['model_iter']
-                for f in range(frequency):
-                    jrand = random.randint(0,len(smiles)-1)
-                    random_selection.append((smiles[jrand],inf_val[jrand], model_iter))
+        #current_host = host_id()
+        #manager_nodes = dd.manager_nodes
+        #key_list = []
+        #for i in range(len(manager_nodes)):
+        #    if manager_nodes[i].h_uid == current_host:
+        #        dm = dd.manager(i)
+        #        key_list.extend(dm.keys())
+        #        # Filter out keys containing model or iter info
+        key_list = dd.local_keys()
+        key_list = [key for key in key_list if "model" not in key and "iter" not in key]
+
+        if len(key_list) > 0:
+            irand = [random.randint(0, len(key_list)-1) for _ in range(num_random_per_node)]
+            for i,k in enumerate(key_list):
+                frequency = irand.count(i)
+                if frequency > 0:
+                    val = dd[k]
+                    smiles = val['smiles']
+                    inf_val = val['inf']
+                    model_iter = val['model_iter']
+                    for f in range(frequency):
+                        jrand = random.randint(0,len(smiles)-1)
+                        random_selection.append((smiles[jrand],inf_val[jrand], model_iter))
     except Exception as e:
-        print(f"Pool worker failed with this error {e}",flush=True)
+        logger.error(f"Pool worker failed with this error {e}")
         raise Exception(e)
     
     return random_selection
 
 
-def sort_dictionary_pg(dd: DDict, 
+def distributed_mpi_sort(dd: DDict, 
                        num_return_sorted: int, 
                        num_procs: int, 
-                       nodelist, cdd: DDict, 
+                       nodelist, cdd: DDict,
+                       thread_list: list,
                        random_number):
    
     max_num_procs_pn = num_procs//len(nodelist)
@@ -319,34 +309,35 @@ def sort_dictionary_pg(dd: DDict,
 
     direct_sort_num = max(num_keys//num_procs+1,min_direct_sort_num)
     num_procs_pn = keys_per_node // direct_sort_num
+
+    spacing = len(thread_list)//num_procs_pn
+    thread_list = thread_list[::spacing][:num_procs_pn]
     
-    print(f"Direct sorting {direct_sort_num} keys per process",flush=True)
+    logger.info(f"Direct sorting {direct_sort_num} keys per process")
 
     global_policy = Policy(distribution=Policy.Distribution.BLOCK)
     grp = ProcessGroup(policy=global_policy, pmi_enabled=True)
 
-    print(f"Launching sorting process group {nodelist}", flush=True)
+    logger.info(f"Launching sorting process group {nodelist}")
     for node in nodelist:
         node_name = Node(node).hostname
         local_policy = Policy(placement=Policy.Placement.HOST_NAME, 
                             host_name=node_name, 
-                            cpu_affinity=list(range(0, 
-                                                    max_num_procs_pn, 
-                                                    max_num_procs_pn//num_procs_pn)))
+                            cpu_affinity=thread_list,)
         grp.add_process(nproc=num_procs_pn, 
                             template=ProcessTemplate(target=mpi_sort, 
                                                     args=(dd, num_keys, num_return_sorted,cdd), 
                                                     policy=local_policy,
                                                     cwd=run_dir))
-    print(f"Added processes to sorting group",flush=True)
+    logger.info(f"Added processes to sorting group")
     grp.init()
     grp.start()
-    print(f"Starting Process Group for Sorting",flush=True)
+    logger.info(f"Starting Process Group for Sorting")
     grp.join()
-    print(f"Process Group for Sorting has joined",flush=True)
+    logger.info(f"Process Group for Sorting has joined")
     grp.close()
 
-    print("Getting random compounds",flush=True)
+    logger.info("Getting random compounds")
     # Grab random compounds from each node
 
     if random_number > 0:
@@ -370,7 +361,7 @@ def sort_dictionary_pg(dd: DDict,
                 random_model.append(mi)
         pool.close()
         pool.join()
-        print(f"Randomly sampled {len(random_smiles)} random smiles for simulation", flush=True)
+        logger.info(f"Randomly sampled {len(random_smiles)} random smiles for simulation")
         cdd['random_compound_sample'] = {'smiles': random_smiles,
                                         'inf': random_inf,
                                         'model_iter': random_model,}

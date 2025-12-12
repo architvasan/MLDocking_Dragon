@@ -1,31 +1,55 @@
+import logging
+import os
 from dragon.data.ddict import DDict
 from dragon.native.machine import System, Node
+from logging_config import driver_logger as logger
 
 
-def output_sims(cdd: DDict, iter=0):
+def save_candidates(cdd: DDict, iter: int):
 
-    candidate_list = cdd['simulated_compounds']
+    candidate_list = cdd['current_sort_list']
+    candidate_smiles = candidate_list["smiles"]
+    candidate_pred = candidate_list["inf"]
 
     with open(f'top_candidates_{iter}.out','w') as f:
-        f.write("# smiles  docking_score  inf_scores(score model_iter) \n")
-        for i in range(len(candidate_list)):
-            smiles = candidate_list[i]
-            results = cdd[smiles]
-            inference_scores = results['inf_scores']
+        f.write("# smiles  inf_score\n")
+        for i in range(len(candidate_smiles)):
+            smiles = candidate_smiles[i]
+            pred = candidate_pred[i]
+            #inference_scores = results['inf_scores']
             #print(inference_scores,flush=True)
-            docking_score = results['dock_score']
-            line = f"{smiles}    {docking_score}    "
-            for inf_result in inference_scores:
-                sc = inf_result[0] # inference score
-                mi = inf_result[1] # corresponding model iter
-                line += f'{sc}    {mi}    '
+            #docking_score = results['dock_score']
+            line = f"{smiles}    {pred}"
+            #for inf_result in inference_scores:
+            #    sc = inf_result[0] # inference score
+            #    mi = inf_result[1] # corresponding model iter
+            #    line += f'{sc}    {mi}    '
+            f.write(line+"\n")
+
+def save_simulations(sdd: DDict, loop_iter: int, number=None):
+
+    simulated_smiles = list(sdd.keys())
+    simulated_smiles.sort(reverse=True, key=lambda x: sdd[x]["dock_score"])
+    if number is not None:
+        simulated_smiles = simulated_smiles[:number]
+
+    with open(f'simulated_compounds_{loop_iter}.out','w') as f:
+        f.write("# smiles  dock_score\n")
+        for i in range(len(simulated_smiles)):
+            smiles = simulated_smiles[i]
+            dock_score = sdd[smiles]["dock_score"]
+            #pred = candidate_pred[i]
+            line = f"{smiles}    {dock_score}"
             f.write(line+"\n")
 
 def max_data_dict_size(num_keys: int, 
+                       node_counts: dict,
                        model_size=33, 
                        smiles_key_val_size=14.6, 
                        canidate_sim_size_per_iter=1.5, 
                        max_pool_frac=0.8):
+
+    logger.info(f"Estimating dictionary sizes with a maximum data pool utiliztion of {max_pool_frac*100} per cent")
 
     # Get information about the allocation
     alloc = System()
@@ -35,32 +59,104 @@ def max_data_dict_size(num_keys: int,
     # Smiles data: approx 14.6 MB per file
     # Trained model: approximately 33 MB, broadcast one copy to each node
     # Data needed is 33 MB*num_nodes + num_keys*14.6
-    min_data_req = model_size*num_tot_nodes + smiles_key_val_size*num_keys
+    min_data_req = smiles_key_val_size*num_keys
 
     # Assume we want to store 10 top cand lists and associated simulation results
-    min_cand_dict_size = 10.*canidate_sim_size_per_iter
+    min_sim_dict_size = 10.*canidate_sim_size_per_iter
 
-    # Assume you need 20 per cent overhead in data dictionary
+    min_model_dict_size = model_size*num_tot_nodes
+
+    # Assume you need 1-max_pool_frac per cent overhead in data dictionary
     data_dict_size = min_data_req/(max_pool_frac)
-    cand_dict_size = min_cand_dict_size/(max_pool_frac)
+    sim_dict_size = min_sim_dict_size/(max_pool_frac)
+    model_dict_size = min_model_dict_size/(max_pool_frac)
 
     # Convert from MB to GB
-    cand_dict_size /= 1024
+    sim_dict_size /= 1024
     data_dict_size /= 1024
+    model_dict_size /= 1024
 
     # Ensure there is a minimum of 1 GB per node
-    cand_dict_size = max(cand_dict_size, num_tot_nodes)
-    data_dict_size = max(data_dict_size, num_tot_nodes)
+    sim_dict_size = max(sim_dict_size, node_counts["simulation"])
+    data_dict_size = max(data_dict_size, node_counts["inference"])
+    model_dict_size = max(model_dict_size, num_tot_nodes)
 
-    max_mem = ddict_mem_check()
+    max_mem = ddict_mem_check(mem_fraction=max_pool_frac)
 
-    print(f"Memory available for ddicts: {max_mem} GB")
+    logger.info(f"Memory available for ddicts: {max_mem} GB")
 
-    if cand_dict_size + data_dict_size > max_mem:
-        raise Exception(f"Not enough mem for dictionaries: {max_mem=} {data_dict_size=} {cand_dict_size=}")
+    if sim_dict_size + data_dict_size + model_dict_size > max_mem:
+        raise Exception(f"Not enough mem for dictionaries: {max_mem=} {max_pool_frac=} {data_dict_size=} {model_dict_size=} {sim_dict_size=}")
 
-    return int(data_dict_size), int(cand_dict_size)
+    return int(data_dict_size), int(sim_dict_size), int(model_dict_size)
 
+def get_gpu_affinity():
+    """Get GPU and CPU affinity bindings from environment variables"""
+    num_ccs = 1
+    if int(os.environ.get('USE_CCS', '0')) == 1:
+        ccs_string = os.getenv("ZEX_NUMBER_OF_CCS")
+        num_ccs = int(ccs_string.split(",")[0].split(":")[1])
+        logger.info(f"Using {num_ccs} CCS on Aurora PVC")
+
+    gpu_devices_string = os.getenv("GPU_DEVICES")
+    gpu_bind = []
+    for g in gpu_devices_string.split(","):
+        for _ in range(num_ccs):
+            if "." in g:
+                gpu_bind.append([float(g)])
+            else:
+                gpu_bind.append([int(g)])
+    num_procs_pn = len(gpu_bind)  # number of procs per node is number of gpus
+    #logger.info(f"Inference running on {num_inf_nodes} nodes and {num_procs_pn} processes per node")
+
+    cpu_affinity_string = os.getenv("CPU_AFFINITY")
+    cpu_ranges = [cpu_aff for cpu_aff in cpu_affinity_string.split(":") if cpu_aff != "list"]
+    cpu_bind = []
+    for cr in cpu_ranges:
+        bind_threads = []
+        thread_ranges = cr.split(",")
+        for tr in thread_ranges:
+            t = tr.split("-")
+            if len(t) == 1:
+                bind_threads.append(int(t[0]))
+            elif len(t) == 2:
+                start_t = int(t[0])
+                end_t = int(t[1])
+                for st in range(start_t, end_t + 1):
+                    bind_threads.append(st)
+        cpu_bind.append(bind_threads)
+    return gpu_bind, cpu_bind
+
+def get_available_threads(sequential_workflow=False):
+    cpu_affinity_string = os.getenv("CPU_AFFINITY")
+    cores_per_node = int(os.getenv("CORES_PER_NODE"))
+    #threads_per_core = int(os.getenv("THREADS_PER_CORE"))
+    skip_threads_string = os.getenv("SKIP_THREADS")
+    skip_threads = [int(t) for t in skip_threads_string.split(',')] if skip_threads_string else []
+
+    gpu_bound_threads = []
+    if not sequential_workflow:
+        affinity_strings = cpu_affinity_string.split(":")[1:]
+        for aff_str in affinity_strings:
+            thread_ranges = aff_str.split(",")
+            for tr in thread_ranges:
+                t = tr.split("-")
+                if len(t) == 1:
+                    gpu_bound_threads.append(int(t[0]))
+                else:
+                    start = int(t[0])
+                    end = int(t[1])
+                    for th in range(start, end+1):
+                        gpu_bound_threads.append(th)
+    logger.debug(f"Threads bound to GPUS: {gpu_bound_threads}")
+    logger.info(f"Number of threads bound to GPUS: {len(gpu_bound_threads)}")
+    available_threads = []
+    for t in range(cores_per_node):
+        if t not in gpu_bound_threads and t not in skip_threads:
+            available_threads.append(t)
+    logger.debug(f"Threads not bound to GPUS: {available_threads}")
+    logger.info(f"Number of threads not bound to GPUS: {len(available_threads)}")
+    return available_threads
 
 def ddict_mem_check(mem_fraction=0.5):
 

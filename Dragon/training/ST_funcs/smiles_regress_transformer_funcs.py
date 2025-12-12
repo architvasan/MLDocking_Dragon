@@ -8,6 +8,7 @@ import json
 import random
 import sys
 from functools import partial
+from time import perf_counter
 
 import keras as kr
 import tensorflow as tf
@@ -30,6 +31,7 @@ from tensorflow.keras.preprocessing import sequence, text
 from .clr_callback import *
 from tensorflow.python.client import device_lib
 from itertools import chain, repeat, islice
+from logging_config import train_logger as logger
 
 driver_path = os.getenv("DRIVER_PATH")
 
@@ -113,6 +115,23 @@ def initialize_hvd():
     return 
 
 
+def stratified_sample(data, y, bin_left, bin_right, numbins, val_split=0.2):
+    from sklearn.model_selection import train_test_split
+    try:
+        bins = np.linspace(bin_left, bin_right, numbins)
+        y_binned = np.digitize(y, bins)
+
+        x_train, x_val, y_train, y_val = train_test_split(data, y, test_size=val_split, stratify=y_binned)
+
+    except:
+        bins = np.linspace(bin_left+2, bin_right-2, numbins-2)
+        y_binned = np.digitize(y, bins)
+
+        x_train, x_val, y_train, y_val = train_test_split(data, y, test_size=val_split, stratify=y_binned)
+
+    return x_train, y_train, x_val, y_val
+
+
 def split_data(data_x, data_y):
     data_x = np.array_split(data_x, hvd.size())[hvd.rank()]
     data_y = np.array_split(data_y, hvd.size())[hvd.rank()]
@@ -146,8 +165,6 @@ def prep_text(texts, tokenizer, max_sequence_length):
     return sequence.pad_sequences(text_sequences, maxlen=max_sequence_length) # pad all sequences so they all have same length
 
 
-#def train_val_data(data_path_train, data_path_vali, hvd_switch, vocab_size, maxlen):
-
 def preprocess_smiles_pair_encoding(data, maxlen, vocab_file, spe_file):
     # some default tokens from huggingface
     default_toks = ['[PAD]', 
@@ -178,15 +195,16 @@ def filter_candidate_keys(ckeys: list, key_string: str):
     ckeys = [key for key in ckeys if key[:str_len] == key_string]
     return ckeys
 
-def assemble_docking_data_top(candidate_dict):
+def assemble_docking_data_top(sim_dd):
     # Retrieve simulation results for all candidates in top list
-    ckeys = candidate_dict.keys()
+    ckeys = sim_dd.keys()
     # max_ckey = candidate_dict["max_sort_iter"]
     # top_val = candidate_dict[max_ckey]
     # top_smiles = top_val["smiles"]
 
     # Here grab all simulated smiles instead of just top ones
-    top_smiles = candidate_dict['simulated_compounds']
+    top_smiles = list(sim_dd.keys()) #sim_dd.bget('simulated_compounds')
+    logger.debug(f"{top_smiles=}")
 
     train_smiles = []
     train_scores = []
@@ -195,60 +213,52 @@ def assemble_docking_data_top(candidate_dict):
     for sm in top_smiles:
         if sm not in ckeys:
             num_skipped += 1
-            with open("training.log", "a") as f:
-                f.write(f"Could not find top candidate in keys: {sm}\n")
+            logger.info(f"Could not find top candidate in keys: {sm}")
             continue
-        val = candidate_dict[sm]
+        val = sim_dd[sm]
         sc = float(val["dock_score"])
         if sc > 0:
             train_smiles.append(sm)
             train_scores.append(sc)
-    print(f"Retrieved {len(train_smiles)} out of {len(top_smiles)} candidates for training",flush=True)
-    print(f"Missing {num_skipped} candidates from dictionary",flush=True)
-    print(f"Zero results for {len(top_smiles) - num_skipped - len(train_smiles)} candidates",flush=True) 
+    logger.info(f"Retrieved {len(train_smiles)} out of {len(top_smiles)} candidates for training")
+    logger.info(f"Missing {num_skipped} candidates from dictionary")
+    logger.info(f"Zero results for {len(top_smiles) - num_skipped - len(train_smiles)} candidates") 
     return train_smiles, train_scores
     
 
-def assemble_docking_data(candidate_dict):
-    # Retrieve simulation results for only most recently simulated candidates
 
-    ckeys = candidate_dict.keys()
-
-    if "last_training_docking_iter" in ckeys:
-        last_training_docking_iter = candidate_dict["last_training_docking_iter"] + 1
-    else:
-        last_training_docking_iter = 0
-    ckeys = filter_candidate_keys(ckeys,f"dock_iter{last_training_docking_iter}")
-
-    train_smiles = []
-    train_scores = []
-
-    if len(ckeys) > 0:
-        for key in ckeys:
-            cval = candidate_dict[key]
-            smiles = cval["smiles"]
-            scores = cval["docking_scores"]
-            for sm,sc in zip(smiles,scores):
-                # only train with docking scores that are non-zero
-                if sc > 0:
-                    train_smiles.append(sm)
-                    train_scores.append([[sc]])
-    with open("sample_train_data.out",'w') as f:
-        for sm,sc in zip(train_smiles,train_scores):
-            f.write(f"{sm},{sc[0]}\n")
-    return train_smiles, train_scores
-
-def train_val_data(candidate_dict,fine_tuned=False,validation_fraction=0.2):
+def train_val_data(sim_dd,validation_fraction=0.2,method="random"):
   
-    train_smiles, train_scores = assemble_docking_data_top(candidate_dict)
-    train_data = list(zip(train_smiles,train_scores))
-    random.shuffle(train_data)
-    train_smiles,train_scores = zip(*train_data)
-    num_train = len(train_smiles)
-    num_val = int(num_train*validation_fraction)
-    val_smiles = train_smiles[0:num_val]
-    val_scores = train_scores[0:num_val]
-
+    assert method in ["random","stratified"], "The sampling method must be random or stratified"
+    tic = perf_counter()
+    smiles, scores = assemble_docking_data_top(sim_dd)
+    if len(smiles) == 0:
+        logger.info(f"There are 0 simulations to train on")
+        return [], [], [], []
+    ddict_time = perf_counter() - tic
+    if method == "random":  
+        data = list(zip(smiles,scores))
+        random.shuffle(data)
+        smiles,scores = zip(*data)
+        num_samples = len(smiles)
+        num_val = int(num_samples*validation_fraction)
+        num_train = num_samples - num_val
+        train_smiles = smiles[:num_train]
+        train_scores = scores[:num_train]
+        val_smiles = smiles[num_train:]
+        val_scores = scores[num_train:]
+    elif method == "stratified":
+        bin_left = -14.
+        bin_right = -6.
+        num_bins = 5
+        train_smiles, train_scores, val_smiles, val_scores = \
+            stratified_sample(smiles, 
+                              scores, 
+                              bin_left, 
+                              bin_right, 
+                              num_bins,
+                              val_split=validation_fraction
+                              )
 
     train_scores = pd.DataFrame(train_scores)
     val_scores = pd.DataFrame(val_scores)
@@ -293,7 +303,7 @@ def train_val_data(candidate_dict,fine_tuned=False,validation_fraction=0.2):
         
         return x_train, y_train, x_val, y_val
     else:
-        return [],[]
+        return [], [], [], []
   
 
 def get_available_gpus():
@@ -391,7 +401,7 @@ class TransformerBlock(layers.Layer):
 
 class ModelArchitecture(layers.Layer):
     #def __init__(self, vocab_size, maxlen, embed_dim, num_heads, ff_dim, DR_TB, DR_ff, activation, dropout1, lr, loss_fn, hvd_switch):
-    def __init__(self, hyper_params):
+    def __init__(self, hyper_params, fine_tune=False):
                 
         lr = hyper_params['general']['lr']
         vocab_size = hyper_params['tokenization']['vocab_size']
@@ -411,6 +421,7 @@ class ModelArchitecture(layers.Layer):
 
         self.num_tb = arch_params['transformer_block']['num_blocks']
         self.loss_fn = hyper_params['general']['loss_fn']
+        self.fine_tune = fine_tune
 
         self.inputs = layers.Input(shape=(maxlen,))
         self.embedding_layer = TokenAndPositionEmbedding(maxlen,
@@ -470,11 +481,43 @@ class ModelArchitecture(layers.Layer):
         
         model = keras.Model(inputs=self.inputs, outputs=outputs)
 
+        if self.fine_tune:
+            layers = ['dropout_2', 'dense_2', 'dropout_3', 'dense_3', 'dropout_4', 'dense_4', 'dropout_5', 'dense_5', 'dropout_6', 'dense_6']
+            for layer in model.layers:
+                if layer.name not in layers:
+                    layer.trainable = False
+
         model.compile(
-            loss=self.loss_fn, optimizer=self.opt, metrics=["mse", r2] #, steps_per_execution=100
+            loss=self.loss_fn, optimizer=self.opt, metrics=["mse", "mae", r2] #, steps_per_execution=100
         )
         
         return model
+
+def assemble_callbacks(hyper_params):
+    lr = hyper_params['general']['lr']
+    patience_red_lr = hyper_params['callbacks']['patience_red_lr']
+    patience_early_stop = hyper_params['callbacks']['patience_early_stop']
+
+    clr = CyclicLR(base_lr = lr, max_lr = 5*lr, step_size=2000.)
+
+    reduce_lr = ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=0.75,
+            patience=patience_red_lr,
+            verbose=1,
+            mode="auto",
+            epsilon=0.0001,
+            cooldown=3,
+            min_lr=0.000000001,
+    )
+
+    early_stop = EarlyStopping(
+            monitor="val_loss",
+            patience=patience_early_stop,
+            verbose=1,
+            mode="auto",
+    )
+    return [clr, reduce_lr] 
 
 class TrainingAndCallbacks:
     #def __init__(self, hvd_switch, checkpt_file, lr, csv_file, patience_red_lr, patience_early_stop):
