@@ -366,23 +366,23 @@ def run_docking(sim_dd,
     while continue_simulations(stop_event, sim_iter):
         #sys.stdout.flush()
         #print(f"{sim_iter=} {proc=}",flush=True)
-        #worker_logger.info(f"{sim_iter=} Starting iteration...")
+        worker_logger.info(f"{sim_iter=} Starting iteration...")
         checkpoint_id = model_list_dd.checkpoint_id
-        #worker_logger.info(f"{sim_iter=} Starting iteration on checkpoint {checkpoint_id}...")
+        worker_logger.info(f"{sim_iter=} On checkpoint {checkpoint_id}...")
 
         # Check for a new model and checkpoint model_list_dd if found
         if not sequential_workflow:
             if new_model_event.is_set():
                 # If there are other processes waiting at the update barrier, reset the update barrier in order to avoid deadlock
-                #worker_logger.info(f"{sim_iter=} Detect {update_barrier.n_waiting} processes waiting at update_barrier")
+                # worker_logger.info(f"{sim_iter=} Detect {update_barrier.n_waiting} processes waiting at update_barrier")
                 # if update_barrier.n_waiting > 0:
                 #     #worker_logger.info(f"{sim_iter=} Resetting update_barrier before checkpointing new model")
                 #     update_barrier.reset()
                 model_list_dd.checkpoint()
-                #worker_logger.info(f"{sim_iter=} Detected new model event, waiting at barrier...")   
+                worker_logger.info(f"{sim_iter=} Detected new model event, waiting at barrier...")   
                 checkpoint_barrier.wait()
                 checkpoint_id = model_list_dd.checkpoint_id
-                #worker_logger.info(f"{sim_iter=} Detected new model, updating to checkpoint {checkpoint_id}")
+                worker_logger.info(f"{sim_iter=} Detected new model, updating to checkpoint {checkpoint_id}")
         
         # Get current top candidates
         top_candidates = model_list_dd.bget("current_sort_list")
