@@ -20,7 +20,7 @@ from docking_sim.launch_docking_sim import launch_docking_sim
 from training.launch_training import launch_training
 from data_loader.data_loader_presorted import get_files
 from data_loader.model_loader import load_pretrained_model
-from driver_functions import max_data_dict_size, get_available_threads
+from driver_functions import max_data_dict_size, get_available_threads, save_simulations
 from logging_config import driver_logger as logger
 
 
@@ -45,8 +45,6 @@ if __name__ == "__main__":
 
     # Start driver
     start_time = perf_counter()
-    # print("Begun dragon driver", flush=True)
-    # print(f"Reading inference data from path: {args.data_path}", flush=True)
 
     logger.info("Begun dragon driver")
     logger.info(f"Reading inference data from path: {args.data_path}")
@@ -191,37 +189,34 @@ if __name__ == "__main__":
     num_proc_simulation = min(num_proc_simulation, top_candidate_number//8)
     num_proc_simulation = max(num_proc_simulation, node_counts["simulation"])
 
-
     # Split threads not used by inference and training between sorting and simulation
     available_threads = get_available_threads()
-    #logger.info(f"Available threads for simulation and sorting: {available_threads}")
-    print(f"{len(available_threads)=}", flush=True)
 
     # Allocate 1 thread per node for sorting
     sorting_threads = [available_threads[0]]
 
     # Distribute remaining threads to simulations
     available_threads = available_threads[1:]
-    spacing = len(available_threads)//(num_proc_simulation//node_counts["simulation"])
-    print(f"Spacing for simulation threads: {spacing}", flush=True)
-    print(f"{num_proc_simulation=}", flush=True)
+    num_proc_simulation = min(len(available_threads)*node_counts["simulation"], num_proc_simulation)
+    spacing = max(len(available_threads)//(num_proc_simulation//node_counts["simulation"]), 1)
     simulation_threads = available_threads[::spacing][:num_proc_simulation]
     num_proc_simulation = len(simulation_threads)*node_counts["simulation"]
 
-    logger.info(f"{num_proc_inference=}")
-    logger.info(f"{num_proc_simulation=}")
-    logger.info(f"{num_proc_sorting=}")
-    logger.info(f"{num_proc_training=}")
+    logger.info(f"Number of inference workers: {num_proc_inference}")
+    logger.info(f"Number of simulation workers: {num_proc_simulation}")
+    logger.info(f"Number of sorting instances: {num_proc_sorting}")
+    logger.info(f"Number of training instances: {num_proc_training}")
 
-    logger.info(f"Number of sorting threads: {len(sorting_threads)}")
-    logger.info(f"Number of simulation threads: {len(simulation_threads)}")
+    logger.info(f"Number of threads for sorting per node: {len(sorting_threads)}")
+    logger.info(f"Number of threads for simulation per node: {len(simulation_threads)}")
 
     # New model event for training
     new_model_event = mp.Event()
 
     # Continue event for all processes
-    continue_event = mp.Event()
-    continue_event.set()
+    # continue_event = mp.Event()
+    # continue_event.set()
+    stop_event = mp.Event()
 
     # sychronization barrier for dictionary checkpoints
     num_parties = num_proc_simulation + num_proc_training + num_proc_inference + num_proc_sorting
@@ -234,7 +229,7 @@ if __name__ == "__main__":
     inf_num_limit = None
     if num_tot_nodes < 3:
         inf_num_limit = 8
-        logger.info(f"Running small test on {num_tot_nodes}; limiting {inf_num_limit} keys per inference worker")
+        logger.info(f"Running small test on {num_tot_nodes} nodes; limiting {inf_num_limit} keys per inference worker")
     
     tic = perf_counter()
     inf_proc = mp.Process(
@@ -243,9 +238,10 @@ if __name__ == "__main__":
             data_dd,
             model_list_dd,
             nodelists["inference"],
-            num_proc_inference+1,
+            num_proc_inference+1, # one process will be skipped to leave gpu for training
             inf_num_limit,
-            continue_event,
+            #continue_event,
+            stop_event,
             new_model_event,
             barrier,
         ),
@@ -266,14 +262,15 @@ if __name__ == "__main__":
                                     model_list_dd,
                                     random_number_fraction,
                                     args.max_iter, # number of model retrainings
-                                    continue_event,
+                                    #continue_event,
+                                    stop_event,
                                     new_model_event,
                                     barrier,),
                                 )
     sorter_proc.start()
 
 #     # Launch Docking Simulations
-    logger.info(f"Launched Docking Simulations")
+    logger.info(f"Launching Docking Simulations...")
     dock_proc = mp.Process(
         target=launch_docking_sim,
         args=(sim_dd, 
@@ -281,7 +278,8 @@ if __name__ == "__main__":
             num_proc_simulation, 
             nodelists["simulation"],
             simulation_threads,
-            continue_event,
+            stop_event,
+            #continue_event,
             new_model_event,
             barrier),
     )
@@ -289,7 +287,7 @@ if __name__ == "__main__":
     
 
 #     # Launch Training
-    logger.info(f"Launched Fine Tune Training")
+    logger.info(f"Launching Fine Tune Training...")
     tic = perf_counter()
     BATCH = 64
     EPOCH = 150
@@ -301,7 +299,9 @@ if __name__ == "__main__":
             sim_dd,
             BATCH,
             EPOCH,
-            continue_event,
+            args.max_iter,
+            stop_event,
+            #continue_event,
             new_model_event,
             barrier,
         ),
@@ -309,6 +309,11 @@ if __name__ == "__main__":
     train_proc.start()
 
     # Monitor processes
+    logger.info(f"inf_proc is {inf_proc.name} with PID {inf_proc.pid}")
+    logger.info(f"sorter_proc is {sorter_proc.name} with PID {sorter_proc.pid}")
+    logger.info(f"dock_proc is {dock_proc.name} with PID {dock_proc.pid}")
+    logger.info(f"train_proc is {train_proc.name} with PID {train_proc.pid}")
+
     all_procs = [inf_proc, sorter_proc, dock_proc, train_proc]
     all_exitcodes = [proc.exitcode for proc in all_procs]
     all_procs_alive = True
@@ -323,22 +328,49 @@ if __name__ == "__main__":
     # Check if all processes exited successfully
     sleep(10)  # Give processes time to finish logging
     error_on_exit = False
+    still_running = False
     for proc in all_procs:
         if proc.exitcode != 0 and proc.exitcode is not None:
             error_on_exit = True
             logger.error(f"Process {proc.name} exited with code {proc.exitcode}")
+            #raise Exception(f"Process {proc.name} exited with code {proc.exitcode}")
+        elif proc.exitcode is None:
+            still_running = True
+            logger.warning(f"Process {proc.name} is still running unexpectedly")
+        else:
+            logger.info(f"Process {proc.name} exited successfully with code {proc.exitcode}")
 
     # If any process exited with an error code, raise an exception
     if error_on_exit:
         for proc in all_procs:
             proc.terminate()
         raise Exception("One or more processes exited with an error code")
+    elif still_running:
+        for proc in all_procs:
+            proc.terminate()
+        raise Exception("One or more processes unexpectedly still running")
     else:
         logger.info("All processes completed successfully")
 
     # If all proceesses completed successfully, join them
-    train_proc.join()
-    dock_proc.join()
-    sorter_proc.join()
-    inf_proc.join()
+    train_proc.terminate()
+    logger.info("Training process joined")
+    dock_proc.terminate()
+    logger.info("Docking simulation process joined")
+    sorter_proc.terminate()
+    logger.info("Sorting process joined")
+    inf_proc.terminate()
+    logger.info("Inference process joined")
+
+    model_list_dd.restore(args.max_iter)
+    logger.info(f"Saving top final simulated compounds ...")
+    save_simulations(sim_dd, model_list_dd.checkpoint_id, number=top_candidate_number)
+
+    # Close the dictionary
+    logger.info("Closing the Dragon Dictionary and exiting ...")
+    model_list_dd.destroy()
+    data_dd.destroy()
+    sim_dd.destroy()
+    end_time = perf_counter()
+    logger.info(f"Total time {end_time - start_time} seconds")
   

@@ -2,10 +2,8 @@
 
 # Pass number of files to this run script
 NUM_FILES=$1
-# Set logging level
-export MLDOCKING_LOGGING_LEVEL=INFO
-# Set number of training iterations
-MAX_ITER=3
+# Number of training iterations
+MAX_ITER=2
 
 # Setup
 #cd $PBS_O_WORKDIR
@@ -113,7 +111,7 @@ DEBUG_STR=
 module list
 echo $LD_LIBRARY_PATH
 #dragon-cleanup
-EXE="dragon $DEBUG_STR ${DRIVER_PATH}/dragon_driver_sequential.py \
+EXE="dragon $DEBUG_STR ${DRIVER_PATH}/dragon_driver_async.py \
 --managers_per_node=$MANAGERS \
 --data_path=${DATA_PATH} \
 --max_procs_per_node=$CORES_PER_NODE \

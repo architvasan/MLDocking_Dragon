@@ -13,36 +13,49 @@ from dragon.data.ddict.ddict import DDict
 from logging_config import train_logger as logger
 from logging_config import stdout_to_logger, driver_logger
 
-def continue_training(continue_event, training_iter):
-    if continue_event is None:
+def continue_training(event, training_iter, model_iter, max_iter):
+    """Determine whether to continue training based on event and iteration count"""
+    sequential_workflow = event is None
+    if sequential_workflow:
         if training_iter == 0:
             return True
         else:
             return False
     else:
-        return continue_event.is_set()
+        if max_iter is not None:
+            if model_iter >= max_iter:
+                event.set()
+                driver_logger.info(f"Reached maximum training iterations {max_iter}, stopping async workflow")
+        return not event.is_set()
 
 def fine_tune(model_list_dd: DDict, 
                 sim_dd: DDict,
-                continue_event,
+                #continue_event,
+                stop_event,
                 new_model_event,
-                barrier, 
+                barrier,
                 BATCH: int, 
-                EPOCH: int, 
+                EPOCH: int,
+                max_iter=None,
                 save_model=True,
                 list_poll_interval_sec=60):
 
 
     tic_start = perf_counter()
-
     prev_top_candidates = []
     training_iter = 0
-    while continue_training(continue_event, training_iter):
+    model_iter = model_list_dd.checkpoint_id
+    while continue_training(stop_event,
+                            training_iter, 
+                            model_iter,
+                            max_iter):
 
         try:
             current_sort_list = model_list_dd.bget("current_sort_list")
             top_candidates = current_sort_list['smiles']
-            simulated_compounds = model_list_dd.bget("simulated_compounds")
+            simulated_compounds = list(sim_dd.keys())
+            model_list_dd.bput('simulated_compounds', simulated_compounds)
+            #simulated_compounds = model_list_dd.bget("simulated_compounds")
         except:
             top_candidates = []
 
@@ -126,6 +139,7 @@ def fine_tune(model_list_dd: DDict,
                     driver_logger.info(f"Barrier passed, clearing new_model_event, progressing with model {model_iter}")
                     new_model_event.clear()
         training_iter += 1
+    logger.info("Training process exiting")
             
 
 

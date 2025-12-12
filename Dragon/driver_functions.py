@@ -26,11 +26,14 @@ def save_candidates(cdd: DDict, iter: int):
             #    line += f'{sc}    {mi}    '
             f.write(line+"\n")
 
-def save_simulations(sdd: DDict, iter: int):
+def save_simulations(sdd: DDict, loop_iter: int, number=None):
 
-    simulated_smiles = sdd['simulated_compounds']
+    simulated_smiles = list(sdd.keys())
+    simulated_smiles.sort(reverse=True, key=lambda x: sdd[x]["dock_score"])
+    if number is not None:
+        simulated_smiles = simulated_smiles[:number]
 
-    with open(f'simulated_compounds_{iter}.out','w') as f:
+    with open(f'simulated_compounds_{loop_iter}.out','w') as f:
         f.write("# smiles  dock_score\n")
         for i in range(len(simulated_smiles)):
             smiles = simulated_smiles[i]
@@ -87,10 +90,47 @@ def max_data_dict_size(num_keys: int,
 
     return int(data_dict_size), int(sim_dict_size), int(model_dict_size)
 
+def get_gpu_affinity():
+    """Get GPU and CPU affinity bindings from environment variables"""
+    num_ccs = 1
+    if int(os.environ.get('USE_CCS', '0')) == 1:
+        ccs_string = os.getenv("ZEX_NUMBER_OF_CCS")
+        num_ccs = int(ccs_string.split(",")[0].split(":")[1])
+        logger.info(f"Using {num_ccs} CCS on Aurora PVC")
+
+    gpu_devices_string = os.getenv("GPU_DEVICES")
+    gpu_bind = []
+    for g in gpu_devices_string.split(","):
+        for _ in range(num_ccs):
+            if "." in g:
+                gpu_bind.append([float(g)])
+            else:
+                gpu_bind.append([int(g)])
+    num_procs_pn = len(gpu_bind)  # number of procs per node is number of gpus
+    #logger.info(f"Inference running on {num_inf_nodes} nodes and {num_procs_pn} processes per node")
+
+    cpu_affinity_string = os.getenv("CPU_AFFINITY")
+    cpu_ranges = [cpu_aff for cpu_aff in cpu_affinity_string.split(":") if cpu_aff != "list"]
+    cpu_bind = []
+    for cr in cpu_ranges:
+        bind_threads = []
+        thread_ranges = cr.split(",")
+        for tr in thread_ranges:
+            t = tr.split("-")
+            if len(t) == 1:
+                bind_threads.append(int(t[0]))
+            elif len(t) == 2:
+                start_t = int(t[0])
+                end_t = int(t[1])
+                for st in range(start_t, end_t + 1):
+                    bind_threads.append(st)
+        cpu_bind.append(bind_threads)
+    return gpu_bind, cpu_bind
+
 def get_available_threads(sequential_workflow=False):
     cpu_affinity_string = os.getenv("CPU_AFFINITY")
     cores_per_node = int(os.getenv("CORES_PER_NODE"))
-    threads_per_core = int(os.getenv("THREADS_PER_CORE"))
+    #threads_per_core = int(os.getenv("THREADS_PER_CORE"))
     skip_threads_string = os.getenv("SKIP_THREADS")
     skip_threads = [int(t) for t in skip_threads_string.split(',')] if skip_threads_string else []
 
@@ -108,13 +148,13 @@ def get_available_threads(sequential_workflow=False):
                     end = int(t[1])
                     for th in range(start, end+1):
                         gpu_bound_threads.append(th)
-    logger.info(f"Threads bound to GPUS: {gpu_bound_threads}")
+    logger.debug(f"Threads bound to GPUS: {gpu_bound_threads}")
     logger.info(f"Number of threads bound to GPUS: {len(gpu_bound_threads)}")
     available_threads = []
-    for t in range(threads_per_core*cores_per_node):
+    for t in range(cores_per_node):
         if t not in gpu_bound_threads and t not in skip_threads:
             available_threads.append(t)
-    logger.info(f"Threads not bound to GPUS: {available_threads}")
+    logger.debug(f"Threads not bound to GPUS: {available_threads}")
     logger.info(f"Number of threads not bound to GPUS: {len(available_threads)}")
     return available_threads
 

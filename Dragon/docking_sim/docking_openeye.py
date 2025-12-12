@@ -299,46 +299,54 @@ def create_trajectory(protein_universe, ligand_dir, output_pdb_name, output_dcd_
     return
 
 
-def filter_candidates(cdd, candidates: list, current_iter):
-    try:
-        # Get keys that store previous docking results
-        ckeys = cdd.keys()
-        ret_time = 0
-        ret_size = 0
-
-        filtered_candidates = [c for c in candidates if c not in ckeys]
-        
-        return filtered_candidates, ret_time, ret_size
-    except Exception as e:
-        exc_type, exc_obj, exc_tb = sys.exc_info()
-        with open("docking_switch.log","a") as f:
-            f.write(f"Filtering failed! {ckeys=}\n")
-            f.write(f"{exc_type=}, {exc_tb.tb_lineno=}\n")
-            f.write(f"{e}\n")
-        raise(e)
-
-def continue_simulations(continue_event, sim_iter):
+def continue_simulations(stop_event, sim_iter, worker_logger=None):
     """Check if the continue event is set to continue simulations."""
-    sequential_workflow = continue_event is None
+    sequential_workflow = stop_event is None
+    if worker_logger:
+            worker_logger.info(f"Sequential workflow is {sequential_workflow}")
     if sequential_workflow:
         if sim_iter == 0:
             return True
         else:
             return False
     else:
-        return continue_event.is_set()  
+        if worker_logger:
+            worker_logger.info(f"Continue is {stop_event.is_set() is False}")
+        return stop_event.is_set() is False 
 
 def run_docking(sim_dd, 
                 model_list_dd, 
                 proc: int, 
                 num_procs: int, 
                 update_barrier=None, 
-                continue_event=None,
+                #continue_event=None,
+                stop_event=None,
                 new_model_event=None,
                 checkpoint_barrier=None,
                 list_poll_interval_sec=10):
     
-    sequential_workflow = continue_event is None
+    """Run docking simulations using OpenEye.
+    :param sim_dd: Dragon distributed dictionary for simulation results
+    :type dd: DDict
+    :param model_list_dd: Dragon distributed dictionary for model list and checkpoints
+    :type model_list_dd: DDict
+    :param proc: process group process integer
+    :type proc: int
+    :param num_procs: total number of docking processes
+    :type num_procs: int
+    :param update_barrier: multiprocessing barrier to synchronize updates to simulated compounds list
+    :type update_barrier: mp.Barrier
+    :param continue_event: multiprocessing event to signal whether to continue simulations
+    :type continue_event: mp.Event
+    :param new_model_event: multiprocessing event to signal new model is available
+    :type new_model_event: mp.Event
+    :param checkpoint_barrier: multiprocessing barrier to synchronize at checkpoints
+    :type checkpoint_barrier: mp.Barrier
+    :param list_poll_interval_sec: time in seconds to wait before polling for new top candidates
+    :type list_poll_interval_sec: int
+    """
+
+    sequential_workflow = stop_event is None
     tic_start = perf_counter()
 
     # Setup logger for this worker
@@ -351,38 +359,37 @@ def run_docking(sim_dd,
     core_list = p.cpu_affinity()
     hostname = socket.gethostname()
     worker_logger.info(f"Launching for worker {proc} from process {myp.ident} on core {core_list} on device {hostname}")
-
-    # Checkpoint info
-    
-    
+      
     # Start running simulations
     prev_top_candidates = []
     sim_iter = 0
-    while continue_simulations(continue_event, sim_iter):
+    while continue_simulations(stop_event, sim_iter):
+        #sys.stdout.flush()
+        #print(f"{sim_iter=} {proc=}",flush=True)
+        #worker_logger.info(f"{sim_iter=} Starting iteration...")
         checkpoint_id = model_list_dd.checkpoint_id
-        worker_logger.info(f"{sim_iter=} Starting iteration on checkpoint {checkpoint_id}...")
-        ckeys = list(model_list_dd.keys())
+        #worker_logger.info(f"{sim_iter=} Starting iteration on checkpoint {checkpoint_id}...")
 
         # Check for a new model and checkpoint model_list_dd if found
         if not sequential_workflow:
             if new_model_event.is_set():
                 # If there are other processes waiting at the update barrier, reset the update barrier in order to avoid deadlock
-                worker_logger.info(f"{sim_iter=} Detect {update_barrier.n_waiting} processes waiting at update_barrier")
-                if update_barrier.n_waiting > 0:
-                    logger.info(f"{sim_iter=} Resetting update_barrier before checkpointing new model")
-                    update_barrier.reset()
+                #worker_logger.info(f"{sim_iter=} Detect {update_barrier.n_waiting} processes waiting at update_barrier")
+                # if update_barrier.n_waiting > 0:
+                #     #worker_logger.info(f"{sim_iter=} Resetting update_barrier before checkpointing new model")
+                #     update_barrier.reset()
                 model_list_dd.checkpoint()
-                worker_logger.info(f"{sim_iter=} Detected new model event, waiting at barrier...")   
+                #worker_logger.info(f"{sim_iter=} Detected new model event, waiting at barrier...")   
                 checkpoint_barrier.wait()
                 checkpoint_id = model_list_dd.checkpoint_id
-                worker_logger.info(f"{sim_iter=} Detected new model, updating to checkpoint {checkpoint_id}")
+                #worker_logger.info(f"{sim_iter=} Detected new model, updating to checkpoint {checkpoint_id}")
         
         # Get current top candidates
         top_candidates = model_list_dd.bget("current_sort_list")
         if top_candidates == prev_top_candidates:
             worker_logger.info(f"{sim_iter=} No new top candidates found, sleeping for {list_poll_interval_sec} seconds...")
             time.sleep(list_poll_interval_sec)
-            sim_iter += 1
+            #sim_iter += 1
             continue
         else:
             prev_top_candidates = top_candidates.copy()
@@ -390,6 +397,7 @@ def run_docking(sim_dd,
         top_candidates_list = list(zip(top_candidates['smiles'], top_candidates['inf'], top_candidates['model_iter']))
         worker_logger.info(f"{sim_iter=} Sorted list has {len(top_candidates_list)} candidates")
         
+        ckeys = list(model_list_dd.keys())
         # Add random samples to sorted candidates if available
         if "random_compound_sample" in ckeys:
             random_candidates = model_list_dd['random_compound_sample']
@@ -407,8 +415,8 @@ def run_docking(sim_dd,
         top_candidates_smiles = list(top_candidates_dict.keys())
 
         # All previously simulated compounds
-        simulated_compounds = model_list_dd.bget("simulated_compounds")
-        worker_logger.info(f"{sim_iter=} Found {len(simulated_compounds)} previously simulated compounds")
+        #simulated_compounds = model_list_dd.bget("simulated_compounds")
+        #worker_logger.info(f"{sim_iter=} Found {len(simulated_compounds)} previously simulated compounds")
 
         # Remove top candidates that have already been simulated
         worker_logger.info(f"{sim_iter=} Found {len(top_candidates_smiles)} top candidates")
@@ -423,48 +431,60 @@ def run_docking(sim_dd,
             else:
                 my_candidates = []
         worker_logger.debug(f"{sim_iter=} Assigned {len(my_candidates)} candidates")    
-        my_sim_candidates = list(set(my_candidates) - set(simulated_compounds))
-        worker_logger.info(f"{sim_iter=} Assigned {len(my_sim_candidates)} candidates to simulate")
+        #my_sim_candidates = list(set(my_candidates) - set(simulated_compounds))
+        #worker_logger.info(f"{sim_iter=} Assigned {len(my_sim_candidates)} candidates to simulate")
 
         # If there are assigned candidates to simulate, run sims
         if len(my_candidates) > 0:
             tic = perf_counter()
             if not os.getenv("DOCKING_SIM_DUMMY"):
-                sim_metrics = dock(sim_dd, my_candidates, my_sim_candidates, top_candidates_dict, proc, worker_logger) 
+                sim_metrics = dock(sim_dd, my_candidates, top_candidates_dict, proc, worker_logger) 
             else:
-                sim_metrics = dummy_dock(sim_dd, my_candidates, my_sim_candidates, top_candidates_dict, proc, worker_logger) 
+                sim_metrics = dummy_dock(sim_dd, my_candidates, top_candidates_dict, proc, worker_logger) 
             toc = perf_counter()
             worker_logger.debug(f"{sim_iter=} docking_sim_time {toc-tic} s")
         else:
             worker_logger.debug(f"{sim_iter=} no sims run \n") 
 
-        # Sync all processes at the barrier before updating the simulated compounds list
-        if update_barrier is not None:
-            # If there are other processes waiting at the checkpoint barrier, reset the update barrier in order to avoid deadlock
-            # Simulated compounds will be updated after the checkpoint barrier is complete
-            if checkpoint_barrier.n_waiting > 0:
-                logger.info(f"{sim_iter=} Docking worker {proc} resetting update_barrier")
-                update_barrier.reset()
-            else:
-                worker_logger.info(f"{sim_iter=} Waiting at update barrier...")
-                try:
-                    update_barrier.wait() # wait for all processes to finish before updating the simulated compounds
-                    if proc == 0:
-                        model_list_dd.bput("simulated_compounds", list(sim_dd.keys()))
-                        logger.info(f"{sim_iter=} Proc 0 updated simulated_compounds list")
-                except BrokenBarrierError:
-                    worker_logger.info(f"{sim_iter=} Broken barrier error, continuing...")
-                    pass
-                
+        # Update simluated compounds
+        # TODO: revisit efficiency of this
+        # if not sequential_workflow:
+        # #     simulated_compounds = set(model_list_dd.bget('simulated_compounds'))
+        # #     my_sim_candidates = set(my_sim_candidates)
+        # #     if my_sim_candidates.issubset(simulated_compounds)
+        # #         logger.info(f"{sim_iter=} proc {proc} updating simulated_compounds")
+        # #         model_list_dd.bput('simulated_compounds',list(sim_dd.keys()))
+        #     # # If there are other processes waiting at the checkpoint barrier, reset the update barrier in order to avoid deadlock
+        #     # Simulated compounds will be updated after the checkpoint barrier is complete
+        #     logger.info(f"{sim_iter=} {proc=} Detect {checkpoint_barrier.n_waiting} processes waiting at checkpoint_barrier")   
+        #     if checkpoint_barrier.n_waiting > 0:
+        #         logger.info(f"{sim_iter=} Docking worker {proc} resetting update_barrier")
+        #         update_barrier.reset()
+        #     else:
+        #         worker_logger.info(f"{sim_iter=} Waiting at update barrier...")
+        #         try:
+        #             worker_logger.info(f"{sim_iter=} Waiting at update barrier with {update_barrier.n_waiting} processes already waiting")
+        #             update_barrier.wait() # wait for all processes to finish before updating the simulated compounds
+        #             worker_logger.info(f"{sim_iter=} Passed update barrier, updating simulated_compounds list")
+        #             if proc == 0:
+        #                 model_list_dd.bput("simulated_compounds", list(sim_dd.keys()))
+        #                 logger.info(f"{sim_iter=} Proc 0 updated simulated_compounds list")
+        #             worker_logger.info(f"{sim_iter=} Finished update...")
+        #         except BrokenBarrierError:
+        #             worker_logger.info(f"{sim_iter=} Broken barrier error, continuing...")
+        #             pass
+        #         worker_logger.info(f"{sim_iter=} Passed update barrier, continuing simulations...")
+        #     worker_logger.info(f"{sim_iter=} Finished async block...")
+        worker_logger.info(f"{sim_iter=} Docking worker {proc} completed iteration \n")        
         sim_iter += 1
 
     toc_end = perf_counter()
-    worker_logger.info(f"{toc_end-tic_start},{dict_time}")
+    worker_logger.info(f"{toc_end-tic_start}")
     return
 
 
 
-def dock(sdd: DDict, candidates: List[str], sim_candidates, top_candidates_dict: dict, proc: int, worker_logger, debug=False):
+def dock(sdd: DDict, candidates: List[str], top_candidates_dict: dict, proc: int, worker_logger, debug=False):
     """Run OpenEye docking on a single ligand.
 
     Parameters
@@ -472,9 +492,15 @@ def dock(sdd: DDict, candidates: List[str], sim_candidates, top_candidates_dict:
     sdd : DDict
         A Dragon Dictionary to store results
     candidates : List[str]
-        A list of smiles strings that are top binding candidates.
+        A list of smiles strings to be processed.
+    sim_candidates : List[str]
+        A list of smiles strings to be simulated.
+    top_candidates_dict : dict
+        A dictionary of top candidates with smiles as keys and inferred scores as values.
     proc : int
         Process group process integer
+    worker_logger : logging.Logger
+        Logger for this worker process.
     
     Returns
     -------
@@ -482,9 +508,6 @@ def dock(sdd: DDict, candidates: List[str], sim_candidates, top_candidates_dict:
         A dictionary with metrics on performance
     """
 
-    #worker_logger = setup_logger(f'dock_worker_{proc}', 
-    #                            f"dock_worker_logs/dock_worker_{proc}.log", 
-    #                            level=logging.DEBUG)
     worker_logger.info(f"Docking worker {proc} starting docking of {len(candidates)} candidates...")
     num_cand = len(candidates)
 
@@ -498,12 +521,17 @@ def dock(sdd: DDict, candidates: List[str], sim_candidates, top_candidates_dict:
 
     data_store_time = 0
     data_store_size = 0
-    
 
     smiter = 0
     for smiles in candidates:
         dtic = perf_counter()
-        if smiles in sim_candidates:
+        try:
+            val = sdd[smiles]
+            dock_score = val['dock_score']
+            inf_scores = val['inf_scores']
+            if top_candidates_dict[smiles] not in inf_scores:
+                inf_scores.append(top_candidates_dict[smiles])
+        except KeyError:
             try:
                 try:
                     conformers = select_enantiomer(from_string(smiles))
@@ -513,7 +541,6 @@ def dock(sdd: DDict, candidates: List[str], sim_candidates, top_candidates_dict:
 
                     dock_score = 0
                 
-
                     # Not implementing this alternate way of getting conformers for now
                     # with tempfile.NamedTemporaryFile(suffix=".pdb", dir=temp_storage) as fd:
                     #     # Read input SMILES and generate conformer
@@ -538,16 +565,9 @@ def dock(sdd: DDict, candidates: List[str], sim_candidates, top_candidates_dict:
             inf_scores = [top_candidates_dict[smiles]]
             dtoc = perf_counter()
             worker_logger.debug(f"{smiter+1}/{num_cand}: Docking performed in {dtoc-dtic} seconds")
-        else:
-            val = sdd[smiles]
-            dock_score = val['dock_score']
-            inf_scores = val['inf_scores']
-            if top_candidates_dict[smiles] not in inf_scores:
-                inf_scores.append(top_candidates_dict[smiles])
+            
         sdd[smiles] = {'dock_score':dock_score, 'inf_scores':inf_scores}
         #worker_logger.debug(f"{smiles=}, {dock_score=}")
-        # with open(f"dock_worker_{proc}.log","a") as f:
-        #     f.write(f"{smiles=} {dock_score=} {inf_scores=}\n")
         dtoc = perf_counter()
         ddict_time = dtoc-dtic
         ddict_size = sys.getsizeof(smiles) + sys.getsizeof(dock_score)
@@ -577,25 +597,29 @@ def dock(sdd: DDict, candidates: List[str], sim_candidates, top_candidates_dict:
 
 
 
-def dummy_dock(sdd, candidates, sim_candidates, top_candidates_dict, proc: int, worker_logger, debug=False):
-    """Run OpenEye docking on a single ligand.
-
+def dummy_dock(sdd, candidates, top_candidates_dict, proc: int, worker_logger, debug=False):
+    """Mock docking function that simulates docking time with sleep and generates dummy scores.
+    
     Parameters
     ----------
-    smiles : ste
-        A single SMILES string.
-    receptor_oedu_file : Path
-        Path to the receptor .oedu file.
-    max_confs : int
-        Number of ligand poses to generate
-    temp_storage : Path
-        Path to the temporary storage directory to write structures to,
-        if None, use the current working Python's built in temp storage.
-
+    sdd : DDict
+        A Dragon Dictionary to store results
+    candidates : List[str]
+        A list of smiles strings to be processed.
+    sim_candidates : List[str]
+        A list of smiles strings to be simulated.
+    top_candidates_dict : dict
+        A dictionary of top candidates with smiles as keys and inferred scores as values.
+    proc : int
+        Process group process integer
+    worker_logger : logging.Logger
+        Logger for this worker process.
+    
     Returns
     -------
-    float
-        The docking score of the best conformer.
+    dict
+        A dictionary with metrics on performance
+  
     """
 
     worker_logger.info(f"Generating dummy dock scores with sleep")
@@ -611,8 +635,14 @@ def dummy_dock(sdd, candidates, sim_candidates, top_candidates_dict, proc: int, 
 
     smiter = 0
     for smiles in candidates:
+        #worker_logger.debug(f"Processing candidate {smiter+1}/{num_cand}: {smiles}")
         dtic = perf_counter()
-        if smiles in sim_candidates:
+        try:
+            val = sdd[smiles]
+            dock_score = val['dock_score']
+            inf_scores = val['inf_scores']
+            inf_scores.append(top_candidates_dict[smiles])
+        except KeyError:
             # We will add a random offset to inferred docking score
             dock_score_offset = random.uniform(-0.5, 0.5)
             dock_score = top_candidates_dict[smiles][0] + dock_score_offset
@@ -623,12 +653,10 @@ def dummy_dock(sdd, candidates, sim_candidates, top_candidates_dict, proc: int, 
             inf_scores = [top_candidates_dict[smiles]]
             dtoc = perf_counter()
             worker_logger.debug(f"{smiter+1}/{num_cand}: Docking performed in {dtoc-dtic} seconds")
-        else:
-            val = sdd[smiles]
-            dock_score = val['dock_score']
-            inf_scores = val['inf_scores']
-            inf_scores.append(top_candidates_dict[smiles])
+           
+        #worker_logger.debug(f"Storing result for candidate {smiter+1}/{num_cand}: {smiles} with dock score {dock_score}")
         sdd[smiles] = {'dock_score':dock_score, 'inf_scores':inf_scores}
+        #worker_logger.debug(f"Result stored for candidate {smiter+1}/{num_cand}: {smiles}")
         #worker_logger.debug(f"{smiles=} {dock_score=}")
         #data_store_time += dtic-dtoc
         #data_store_size += sys.getsizeof(smiles) + sys.getsizeof(dock_score)

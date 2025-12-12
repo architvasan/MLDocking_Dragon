@@ -21,6 +21,7 @@ import heapq
 import socket
 import traceback
 
+import intel_extension_for_tensorflow as itex
 from data_loader.data_loader_presorted import load_inference_data, initialize_worker
 from logging_config import sort_logger as logger
 from logging_config import driver_logger
@@ -28,106 +29,11 @@ from logging_config import driver_logger
 
 MAX_BRANCHING_FACTOR = 5
 
-global data_dict
-data_dict = None
 
-
-def init_worker(q):
-    global data_dict
-    data_dict = q.get()
-    return
-
-
-def filter_candidate_keys(ckeys: list):
-    ckeys = [
-        key for key in ckeys if "iter" not in key and key[0] != "d" and key[0] != "l"
-    ]
-    return ckeys
-
-
-def compare_candidate_results(
-    candidate_dict,
-    continue_event,
-    num_return_sorted,
-    ncompare=3,
-    max_iter=100,
-    purge=True,
-):
-
-    print(f"Comparing Candidate Lists")
-    end_workflow = False
-    candidate_keys = candidate_dict.keys()
-    sort_iter = 0
-    if "sort_iter" in candidate_keys:
-        sort_iter = candidate_dict["sort_iter"]
-        # candidate_keys.remove('iter')
-    candidate_keys = filter_candidate_keys(candidate_keys)
-    print(f"{candidate_keys=}")
-    # ncompare = min(ncompare,len(candidate_keys))
-    candidate_keys.sort(reverse=True)
-    # print(f"{candidate_keys=}")
-    num_top_candidates = 0
-    if len(candidate_keys) > 0:
-        num_top_candidates = len(candidate_dict[candidate_keys[0]]["smiles"])
-
-    if sort_iter > max_iter:
-        # end if maximum number of iterations reached
-        end_workflow = True
-        print(
-            f"Ending workflow: sort_iter {sort_iter} exceeded max_iter {max_iter}",
-            flush=True,
-        )
-    elif len(candidate_keys) > ncompare and num_top_candidates == num_return_sorted:
-        # look for unique entries in most recent ncompare lists
-        # only do this if there are enough lists to compare and if enough candidates have been identified
-
-        not_in_common = []
-        model_iters = []
-        print(f"{candidate_dict=}", flush=True)
-        for i in range(ncompare):
-            for j in range(ncompare):
-                if i < j:
-                    ckey_i = candidate_keys[i]
-                    ckey_j = candidate_keys[j]
-                    not_in_common += list(
-                        set(candidate_dict[ckey_i]["smiles"])
-                        ^ set(candidate_dict[ckey_j]["smiles"])
-                    )
-                    model_iter_i = list(set(candidate_dict[ckey_i]["model_iter"]))
-                    model_iter_j = list(set(candidate_dict[ckey_j]["model_iter"]))
-                    model_iters += model_iter_i
-                    model_iters += model_iter_j
-        print(f"Number not in common {len(not_in_common)}")
-        # ncompare consecutive lists are identical, end workflow
-        print(f"{model_iters=}")
-
-        # End workflow if ncompare lists with unique model_iters are idententical
-        if len(not_in_common) == 0 and len(model_iters) == 2 * ncompare:
-            if len(set(model_iters)) == ncompare:
-                print(f"Ending workflow: {ncompare} lists identical", flush=True)
-                end_workflow = True
-
-        # If purge, only keep ncompare sorting lists
-        if purge:
-            if len(candidate_keys) > ncompare:
-                del candidate_dict[candidate_keys[-1]]
-
-    print(f"{end_workflow=}")
-    if end_workflow:
-        continue_event.clear()
-
-
-def save_top_candidates_list(candidate_dict):
-    ckeys = filter_candidate_keys(candidate_dict.keys())
-    if len(ckeys) > 0:
-        max_ckey = max(ckeys)
-        top_candidates = candidate_dict[max_ckey]
-        top_smiles = top_candidates["smiles"]
-        lines = [sm + "\n" for sm in top_smiles]
-
-        with open(f"top_candidates.out", "w") as f:
-            f.writelines(lines)
-
+def compare_candidate_results():
+    """Compare candidate results from different sorting iterations."""
+    # TODO: implement comparison logic to determine model improvement and convergence
+    pass
 
 
 def sort_controller(
@@ -139,20 +45,21 @@ def sort_controller(
     model_list_dd,
     random_number_fraction,
     max_iter=10,
-    continue_event=None,
+    #continue_event=None,
+    stop_event=None,
     new_model_event=None,
     barrier=None,
-    checkpoint_interval_min=1,
+    checkpoint_interval_sec=60,
 ):
 
-    sequential_workflow = continue_event is None
+    sequential_workflow = stop_event is None
     
     logger.info("Starting Sort Controller")
     logger.info(f"Sorting for {top_candidate_number} candidates")
 
     # For asynchronous workflow, wait for checkpoint interval before starting
     if not sequential_workflow:
-        time.sleep(checkpoint_interval_min * 60)
+        time.sleep(checkpoint_interval_sec)
 
     continue_flag = True
     sorting_iter = 0
@@ -196,19 +103,10 @@ def sort_controller(
             sorter_proc.start()
             sorter_proc.join()
 
-        if not sequential_workflow:
-            if checkpoint_id > max_iter: 
-                continue_event.clear()
-                driver_logger.info(f"Clearing continue_event after 3 checkpoints for testing purposes")
-            continue_flag = continue_event.is_set()
-        else:
-            continue_flag = False
-
         sorting_iter += 1
         # Make checkpoint decision
         if sequential_workflow:
-            # Checkpoint on every iteration for sequential workflow
-            model_list_dd.checkpoint()
+            continue_flag = False
         else:
             if new_model_event.is_set():
                 model_list_dd.checkpoint()
@@ -216,10 +114,18 @@ def sort_controller(
                 driver_logger.info(f"Sort controller waiting at barrier on {sorting_iter=} and {checkpoint_id=}...")
                 barrier.wait()
                 logger.info(f"Sort controller advanced to checkpoint {model_list_dd.checkpoint_id}")
-    
+                
+                # Check whether to continue async workflow
+                # if checkpoint_id > max_iter: 
+                #     continue_event.clear()
+                #     driver_logger.info(f"Clearing continue_event after {max_iter} checkpoints for testing purposes")
+                continue_flag = not stop_event.is_set()
 
+                # For asynchronous workflow, wait for checkpoint interval before sorting with new inference results
+                if not sequential_workflow and continue_flag:
+                    time.sleep(checkpoint_interval_sec)
+        
 
-#TODO: pass in checkpoint_id
 def get_largest(dd, out_queue, num_return_sorted, checkpoint_id):
     # get num_return_sorted values from the manager
     # reflected in dd (i.e. dd is a manager directed
@@ -250,6 +156,8 @@ def get_largest(dd, out_queue, num_return_sorted, checkpoint_id):
                 out_queue.put(this_value[i])
         except EOFError:
             pass
+        except IndexError:
+            pass
 
         #print(perf_counter()-tic,flush=True)
 
@@ -279,6 +187,10 @@ def sort_dictionary(dd: DDict, num_return_sorted, cdd: DDict, random_number: int
             if len(candidate_list) == num_return_sorted:
                 break
     toc_filter = perf_counter()
+
+    if len(candidate_list) == 0:
+        logger.info(f"No candidates found for sorting")
+        return
 
     logger.info("HERE IS THE CANDIDATE LIST (first 10 only)")
     logger.info("******************************************")

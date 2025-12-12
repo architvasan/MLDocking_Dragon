@@ -13,6 +13,7 @@ from dragon.native.machine import Node
 
 from inference.utils_transformer import ParamsJson, ModelArchitecture, pad
 from logging_config import inf_logger as logger
+from driver_functions import get_gpu_affinity
 from .run_inference import run_inference_loop
 
 driver_path = os.getenv("DRIVER_PATH")
@@ -23,64 +24,48 @@ def launch_inference(data_dd: DDict,
                     nodelist, 
                     num_procs: int, 
                     inf_num_limit: int,
-                    continue_event = None,
+                    stop_event=None,
+                    #continue_event = None,
                     new_model_event = None,
-                    barrier=None,
-                    debug=True):
+                    barrier=None,):
     """Launch the inference routine
-
-    :param dd: Dragon distributed dictionary
-    :type dd: DDict
-    :param num_procs: number of processes to use for inference
+    :param data_dd: DDict containing the data for inference
+    :type data_dd: DDict
+    :param model_list_dd: DDict containing the model list for inference
+    :type model_list_dd: DDict
+    :param nodelist: List of nodes to use for inference
+    :type nodelist: list
+    :param num_procs: Number of processes to launch
     :type num_procs: int
+    :param inf_num_limit: Limit on number of inference samples per worker
+    :type inf_num_limit: int
+    :param continue_event: Event to signal continuation of inference
+    :type continue_event: mp.Event
+    :param new_model_event: Event to signal new model availability
+    :type new_model_event: mp.Event
+    :param barrier: Barrier for synchronization
+    :type barrier: mp.Barrier
     """
+
+    sequential_workflow = stop_event is None
     
+    logger.info(f"Current checkpoint is {model_list_dd.checkpoint_id}")
+
     num_inf_nodes = len(nodelist)
-
-    num_ccs = 1
-    if int(os.environ.get('USE_CCS', '0')) == 1:
-        ccs_string = os.getenv("ZEX_NUMBER_OF_CCS")
-        num_ccs = int(ccs_string.split(",")[0].split(":")[1])
-        logger.info(f"Using {num_ccs} CCS on Aurora PVC")
-
-    gpu_devices_string = os.getenv("GPU_DEVICES")
-    inf_gpu_bind = []
-    for g in gpu_devices_string.split(","):
-        for _ in range(num_ccs):
-            if "." in g:
-                inf_gpu_bind.append([float(g)])
-            else:
-                inf_gpu_bind.append([int(g)])
+    
+    inf_gpu_bind, inf_cpu_bind = get_gpu_affinity()
     num_procs_pn = len(inf_gpu_bind)  # number of procs per node is number of gpus
     logger.info(f"Inference running on {num_inf_nodes} nodes and {num_procs_pn} processes per node")
-
-    cpu_affinity_string = os.getenv("CPU_AFFINITY")
-    cpu_ranges = [cpu_aff for cpu_aff in cpu_affinity_string.split(":") if cpu_aff != "list"]
-    inf_cpu_bind = []
-    for cr in cpu_ranges:
-        bind_threads = []
-        thread_ranges = cr.split(",")
-        for tr in thread_ranges:
-            t = tr.split("-")
-            if len(t) == 1:
-                bind_threads.append(int(t[0]))
-            elif len(t) == 2:
-                start_t = int(t[0])
-                end_t = int(t[1])
-                for st in range(start_t, end_t + 1):
-                    bind_threads.append(st)
-        inf_cpu_bind.append(bind_threads)
+    if sequential_workflow:
+        logger.info(f"Inference running in sequential workflow mode with {num_inf_nodes*num_procs_pn} total workers")
+    else:
+        logger.info(f"Inference running in asynchronous workflow mode with {num_inf_nodes*num_procs_pn - 1} total workers (reserving 1 GPU per node for training)")
 
     run_dir = os.getcwd()
     logger.info(f"{inf_cpu_bind=}")
     logger.info(f"{inf_gpu_bind=}")
     if len(inf_cpu_bind) != len(inf_gpu_bind):
         raise (Exception("Number of cpu bindings does not match the number of gpus"))
-
-    # Get checkpoint id
-    checkpoint_id = model_list_dd.checkpoint_id
-
-    #bar = mp.Barrier(parties=num_inf_nodes * num_procs_pn)
 
     # Create the process group
     tic = perf_counter()
@@ -91,8 +76,8 @@ def launch_inference(data_dd: DDict,
         for proc in range(num_procs_pn):
             proc_id = node_num * num_procs_pn + proc
 
-            if continue_event is not None and proc_id == 0:
-                # In the asynchronous workflow, the first gpu is reserved for the fine-tuning process
+            if not sequential_workflow and proc_id == 0:
+                logger.info(f"Skipping inference launch on node {node_name} proc {inf_gpu_bind[proc]} to reserve GPU for training")    
                 continue
 
             local_policy = Policy(placement=Policy.Placement.HOST_NAME,
@@ -105,21 +90,10 @@ def launch_inference(data_dd: DDict,
                                                             data_dd,
                                                             proc_id,
                                                             num_procs_pn*num_inf_nodes,
-                                                            continue_event,
+                                                            #continue_event,
+                                                            stop_event,
                                                             new_model_event,
                                                             barrier,), 
-                                                    #  args=(data_dd,
-                                                    #     model_list_dd,
-                                                    #     iter,
-                                                    #     num_procs_pn,
-                                                    #     proc_id, 
-                                                    #     continue_event, # Continue event not used in sequential wf
-                                                    #     checkpoint_id,
-                                                    #     inf_num_limit,
-                                                    #     debug,
-                                                    #     new_model_event,
-                                                    #     barrier,
-                                                    #     ), 
                                                      cwd=run_dir,
                                                      policy=local_policy,))
     
@@ -127,8 +101,14 @@ def launch_inference(data_dd: DDict,
     grp.init()
     logger.info(f"Starting Process Group for Inference")
     grp.start()
-    grp.join()
-    logger.info(f"Joined Process Group for Inference")
-    grp.close()
+    if sequential_workflow:
+        grp.join()
+        logger.info(f"Joined Process Group for Inference")
+        grp.close()
+    else:
+        stop_event.wait()
+        logger.info(f"Stop event has been set, terminating inference process group")
+        grp.terminate()
+        
     toc = perf_counter()
     logger.info(f"Performed inference in {toc-tic} seconds")

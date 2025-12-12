@@ -92,7 +92,7 @@ def load_model(new_model_event, i):
     else:
         return False
 
-def continue_inference(finished_keys, continue_event):
+def continue_inference(finished_keys, event):
     """Check if inference should continue
     :param finished_keys: boolean indicating if all keys have been processed
     :type finished_keys: bool
@@ -101,11 +101,11 @@ def continue_inference(finished_keys, continue_event):
     :return: True if inference should continue, False otherwise
     :rtype: bool
     """
-    serial_workflow = continue_event is None
+    serial_workflow = event is None
     if serial_workflow:
-        return not finished_keys
+        return finished_keys
     else:
-        return continue_event.is_set()
+        return not event.is_set()
 
 def get_local_keys(data_dd, proc: int, num_procs: int) -> List[str]:
     """Read the keys containing inference data from the Dragon Dictionary
@@ -187,7 +187,8 @@ def run_inference_loop(model_list_dd,
                        data_dd,
                        proc: int,
                        num_procs: int,
-                       continue_event=None,
+                       #continue_event=None,
+                       stop_event=None,
                        new_model_event=None,
                        barrier=None,
                        ):
@@ -208,6 +209,8 @@ def run_inference_loop(model_list_dd,
     :type barrier: threading.Barrier
     '''
 
+    sequential_workflow = stop_event is None
+
     os.makedirs("inference_worker_logs", exist_ok=True)
     worker_logger = setup_logger(f'inf_worker_{proc}', f"inference_worker_logs/inference_worker_{proc}.log", level=logging.DEBUG)
     worker_logger.info(f"Starting inference worker {proc} of {num_procs} procs")
@@ -224,11 +227,11 @@ def run_inference_loop(model_list_dd,
     num_keys = len(my_keys)
     worker_logger.info(f"Processing {num_keys} keys")
 
-    # Loop over keys until all keys are processed or continue_event is cleared
+    # Loop over keys until all keys are processed or stop_event is set
     next_key_index = 0
     while continue_inference(next_key_index < num_keys,
-                            continue_event):
-
+                            stop_event):
+        #worker_logger.debug(f"Key index {next_key_index} of {num_keys}")
         # Get current model iteration
         checkpoint_id = model_list_dd.checkpoint_id
 
@@ -241,19 +244,23 @@ def run_inference_loop(model_list_dd,
         val = data_dd[this_key]
         dd_read_toc = perf_counter()
         dd_read_time = dd_read_toc - dd_read_tic
-
+        #logger.debug(f"Read key {this_key} from Dragon Dict in {dd_read_time} seconds")
         # Check if key value is stale
         # If yes, update model and continue
         # Loop will wait here until new model is available
         if val['model_iter'] == checkpoint_id:
-            worker_logger.info(f"Key {this_key} is stale, waiting for new model")
-            model = update_model(model_list_dd, 
-                                hyper_params, 
-                                new_model_event, 
-                                barrier, 
-                                proc,
-                                worker_logger)
-            worker_logger.info(f"New model loaded")
+            if sequential_workflow:
+                next_key_index += 1
+                continue
+            else:
+                worker_logger.info(f"Key {this_key} is stale, waiting for new model")
+                model = update_model(model_list_dd, 
+                                    hyper_params, 
+                                    new_model_event, 
+                                    barrier, 
+                                    proc,
+                                    worker_logger)
+                worker_logger.info(f"New model loaded")
         
         # Process key
         metrics = process_key(this_key, val, model, checkpoint_id, hyper_params, tokenizer, data_dd)
@@ -268,6 +275,7 @@ def run_inference_loop(model_list_dd,
             new_model = new_model_event.is_set()
         except:
             new_model = False
+        worker_logger.debug(f"Checking for new model event: {new_model=}")
         if new_model:
             worker_logger.info(f"Getting new model")
             model = update_model(model_list_dd, 
