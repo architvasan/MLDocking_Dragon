@@ -1,29 +1,27 @@
 # Install
 
-## Polaris
+## Aurora
 Run this script in the directory where you want the environment installed:
 ```shell
-./install_polaris.sh
+./install_aurora.sh
 ```
 
-Edit `env_polaris.sh` to include the path to the environment and run to activate:
+Edit `env_aurora.sh` to include the path to the environment and run to activate:
 ```shell
-./env_polaris.sh
+./env_aurora.sh
 ```
-
-# Unified run script
 
 # Sequential Workflow
 
 Get in an interactive session with several nodes or from a submit script:
 
 ```shell
-./run_driver.sh
+./run_driver_seq.sh 256
 ```
 
-# Sort test
+Edit the integer to match the number of files for the workflow.  You may also need to edit paths in the script.
 
-```shell
-./run_sort_test.sh ./path/to/data
+To submit a job
 ```
-
+qsub sub_driver_seq_aurora.sh
+```
