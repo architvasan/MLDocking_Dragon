@@ -12,6 +12,7 @@ from dragon.infrastructure.policy import Policy
 from dragon.native.process import Process, ProcessTemplate, MSG_PIPE, MSG_DEVNULL
 from dragon.infrastructure.connection import Connection
 from dragon.native.machine import cpu_count, current, System, Node
+from dragon.infrastructure.facts import PMIBackend
 from dragon.utils import host_id
 from .sort_mpi import mpi_sort
 import datetime
@@ -73,6 +74,12 @@ def sort_controller(
         #logger.info(f"Model list dictionary synced to newest checkpoint id {model_list_dd.checkpoint_id}")
         tic = perf_counter()
 
+        if sorting_iter > 0:
+            previous_list = model_list_dd.bget("current_sort_list")
+            list_key = f"list_{sorting_iter-1}"
+            logger.info(f"Saving {list_key}")
+            model_list_dd[list_key] = previous_list
+
         random_number = int(random_number_fraction*top_candidate_number)
         logger.info(f"Adding {random_number} random candidates to training")
         if os.getenv("USE_MPI_SORT"):
@@ -88,7 +95,9 @@ def sort_controller(
                                         random_number,
                                         ),
                                     )
+            logger.info("Starting MPI sorting")
             sorter_proc.start()
+            logger.info("Waiting for MPI sort to complete")
             sorter_proc.join()
         else:
             logger.info("Using filter sort")
@@ -111,9 +120,9 @@ def sort_controller(
             if new_model_event.is_set():
                 model_list_dd.checkpoint()
                 checkpoint_id = model_list_dd.checkpoint_id
-                driver_logger.info(f"Sort controller waiting at barrier on {sorting_iter=} and {checkpoint_id=}...")
-                barrier.wait()
-                logger.info(f"Sort controller advanced to checkpoint {model_list_dd.checkpoint_id}")
+                #driver_logger.info(f"Sort controller waiting at barrier on {sorting_iter=} and {checkpoint_id=}...")
+                #barrier.wait()
+                logger.info(f"Sort controller advanced to checkpoint {checkpoint_id}")
                 
                 # Check whether to continue async workflow
                 # if checkpoint_id > max_iter: 
@@ -293,30 +302,40 @@ def make_random_compound_selection(random_number):
 def distributed_mpi_sort(dd: DDict, 
                        num_return_sorted: int, 
                        num_procs: int, 
-                       nodelist, cdd: DDict,
+                       nodelist,
                        thread_list: list,
+                       cdd: DDict,
                        random_number):
    
-    max_num_procs_pn = num_procs//len(nodelist)
+    logger.info("Starting MPI sort")
+    max_num_procs_pn = len(thread_list)
+    logger.info(f"{thread_list=}")
     run_dir = os.getcwd()
     key_list = dd.keys()
-    key_list = [key for key in key_list if "iter" not in key and "model" not in key]
-    
     num_keys = len(key_list)
+    logger.info(f"{max_num_procs_pn=} {num_keys=}")
 
     keys_per_node = num_keys//len(nodelist)
     min_direct_sort_num = 4
 
     direct_sort_num = max(num_keys//num_procs+1,min_direct_sort_num)
-    num_procs_pn = keys_per_node // direct_sort_num
+    num_procs_pn = max(keys_per_node // direct_sort_num, 1)
 
-    spacing = len(thread_list)//num_procs_pn
-    thread_list = thread_list[::spacing][:num_procs_pn]
-    
     logger.info(f"Direct sorting {direct_sort_num} keys per process")
 
+    spacing = max(len(thread_list)//num_procs_pn,1)
+    logger.info(f"{spacing=} {num_procs_pn=}")
+    thread_list = thread_list[::spacing][:num_procs_pn]
+    logger.info(f"{thread_list=}")
+    num_procs_pn = len(thread_list)
+    
+    logger.info(f"Number of ranks per node: {num_procs_pn}")
+
     global_policy = Policy(distribution=Policy.Distribution.BLOCK)
-    grp = ProcessGroup(policy=global_policy, pmi_enabled=True)
+    pmi_backend = PMIBackend.CRAY
+    if os.getenv("PMI_TYPE") == "PMIX":
+        pmi_backend = PMIBackend.PMIX
+    grp = ProcessGroup(policy=global_policy, pmi=pmi_backend)
 
     logger.info(f"Launching sorting process group {nodelist}")
     for node in nodelist:

@@ -40,7 +40,7 @@ def fine_tune(model_list_dd: DDict,
                 save_model=True,
                 list_poll_interval_sec=60):
 
-
+    sequential_workflow = stop_event is not None
     tic_start = perf_counter()
     prev_top_candidates = []
     training_iter = 0
@@ -51,7 +51,11 @@ def fine_tune(model_list_dd: DDict,
                             max_iter):
 
         try:
+            # This will block until current sort list is available
             current_sort_list = model_list_dd.bget("current_sort_list")
+            # Once the sorted list is available clear the new model event
+            if not sequential_workflow:
+                new_model_event.clear()
             top_candidates = current_sort_list['smiles']
             simulated_compounds = list(sim_dd.keys())
             model_list_dd.bput('simulated_compounds', simulated_compounds)
@@ -135,9 +139,9 @@ def fine_tune(model_list_dd: DDict,
                 if new_model_event is not None:
                     new_model_event.set()
                     driver_logger.info(f"Training setting new_model_event and waiting for barrier to advance to checkpoint")
-                    barrier.wait()
-                    driver_logger.info(f"Barrier passed, clearing new_model_event, progressing with model {model_iter}")
-                    new_model_event.clear()
+                    #barrier.wait()
+                    #driver_logger.info(f"Barrier passed, clearing new_model_event, progressing with model {model_iter}")
+                    #new_model_event.clear()
         training_iter += 1
     logger.info("Training process exiting")
             

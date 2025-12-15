@@ -50,6 +50,7 @@ def retrieve_model_from_dict(dd: Union[DDict, dict], checkpoint=False, hyper_par
     logger.info(f"{list(dd.keys())=}")
 
     tic = perf_counter()
+    # This will block until model weight are available
     weights_dict = dd.bget('model')
     logger.debug(f"bget time: {perf_counter()-tic:.4f} seconds")
     if hyper_params is None:

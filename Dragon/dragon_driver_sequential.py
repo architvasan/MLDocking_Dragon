@@ -252,7 +252,7 @@ if __name__ == "__main__":
                                 args=(
                                     data_dd,
                                     top_candidate_number,
-                                    args.max_procs_per_node,
+                                    len(sorting_threads),
                                     nodelists['sorting'],
                                     sorting_threads,
                                     model_list_dd,

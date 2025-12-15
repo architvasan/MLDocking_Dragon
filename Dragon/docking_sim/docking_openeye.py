@@ -379,12 +379,13 @@ def run_docking(sim_dd,
                 #     #worker_logger.info(f"{sim_iter=} Resetting update_barrier before checkpointing new model")
                 #     update_barrier.reset()
                 model_list_dd.checkpoint()
-                worker_logger.info(f"{sim_iter=} Detected new model event, waiting at barrier...")   
-                checkpoint_barrier.wait()
+                #worker_logger.info(f"{sim_iter=} Detected new model event, waiting at barrier...")   
+                #checkpoint_barrier.wait()
                 checkpoint_id = model_list_dd.checkpoint_id
                 worker_logger.info(f"{sim_iter=} Detected new model, updating to checkpoint {checkpoint_id}")
-        
+                pause_checkpointing = True
         # Get current top candidates
+        # This will block until current_sort_list is avilable in the checkpoint
         top_candidates = model_list_dd.bget("current_sort_list")
         if top_candidates == prev_top_candidates:
             worker_logger.info(f"{sim_iter=} No new top candidates found, sleeping for {list_poll_interval_sec} seconds...")
@@ -523,6 +524,7 @@ def dock(sdd: DDict, candidates: List[str], top_candidates_dict: dict, proc: int
     data_store_size = 0
 
     smiter = 0
+    num_simulated = 0
     for smiles in candidates:
         dtic = perf_counter()
         try:
@@ -531,7 +533,9 @@ def dock(sdd: DDict, candidates: List[str], top_candidates_dict: dict, proc: int
             inf_scores = val['inf_scores']
             if top_candidates_dict[smiles] not in inf_scores:
                 inf_scores.append(top_candidates_dict[smiles])
+            worker_logger.debug(f"{smiter+1}/{num_cand}: Candidate already simulated")
         except KeyError:
+            num_simulated += 1
             try:
                 try:
                     conformers = select_enantiomer(from_string(smiles))
@@ -590,7 +594,7 @@ def dock(sdd: DDict, candidates: List[str], top_candidates_dict: dict, proc: int
     metrics['dict_size'] =  ddict_size
 
     worker_logger.debug(f"{dock_scores=}")
-    worker_logger.debug(f"Simulated {num_cand} candidates in {toc-tic} s, {time_per_cand=}\n")
+    worker_logger.debug(f"Simulated {num_simulated} out of {num_cand} candidates in {toc-tic} s, {time_per_cand=}\n")
 
     #worker_logger.info(f"Simulated {num_cand} candidates in {toc-tic} s on worker {proc}, {time_per_cand=}")
     return metrics
