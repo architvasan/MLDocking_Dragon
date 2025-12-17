@@ -74,7 +74,7 @@ def sort_controller(
         #logger.info(f"Model list dictionary synced to newest checkpoint id {model_list_dd.checkpoint_id}")
         tic = perf_counter()
 
-        if sorting_iter > 0:
+        if sorting_iter > 0 and not new_model_event.is_set():
             previous_list = model_list_dd.bget("current_sort_list")
             list_key = f"list_{sorting_iter-1}"
             logger.info(f"Saving {list_key}")
@@ -129,10 +129,12 @@ def sort_controller(
                 #     continue_event.clear()
                 #     driver_logger.info(f"Clearing continue_event after {max_iter} checkpoints for testing purposes")
                 continue_flag = not stop_event.is_set()
-
+                logger.info(f"Continue flag is {continue_flag}")
                 # For asynchronous workflow, wait for checkpoint interval before sorting with new inference results
-                if not sequential_workflow and continue_flag:
+                if continue_flag:
                     time.sleep(checkpoint_interval_sec)
+                    logger.info("Finished sleep")
+        logger.info(f"Continuing on to next loop iter")
         
 
 def get_largest(dd, out_queue, num_return_sorted, checkpoint_id):
@@ -144,7 +146,7 @@ def get_largest(dd, out_queue, num_return_sorted, checkpoint_id):
         keys = dd.keys()
         #keys = [k for k in keys if "model" not in k and "iter" not in k]
         this_value = []
-
+        logger.info("Get largest running")
         for key in keys:
             if "model" not in key and "iter" not in key:
                 val = dd[key]
@@ -196,6 +198,7 @@ def sort_dictionary(dd: DDict, num_return_sorted, cdd: DDict, random_number: int
             if len(candidate_list) == num_return_sorted:
                 break
     toc_filter = perf_counter()
+    logger.info(f"Finished filter sort in {toc_filter-tic_filter} seconds")
 
     if len(candidate_list) == 0:
         logger.info(f"No candidates found for sorting")

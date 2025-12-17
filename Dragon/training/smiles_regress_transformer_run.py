@@ -30,7 +30,6 @@ def continue_training(event, training_iter, model_iter, max_iter):
 
 def fine_tune(model_list_dd: DDict, 
                 sim_dd: DDict,
-                #continue_event,
                 stop_event,
                 new_model_event,
                 barrier,
@@ -40,7 +39,8 @@ def fine_tune(model_list_dd: DDict,
                 save_model=True,
                 list_poll_interval_sec=60):
 
-    sequential_workflow = stop_event is not None
+    logger.info("Starting fine tune training")
+    sequential_workflow = stop_event is None
     tic_start = perf_counter()
     prev_top_candidates = []
     training_iter = 0
@@ -50,24 +50,34 @@ def fine_tune(model_list_dd: DDict,
                             model_iter,
                             max_iter):
 
-        try:
-            # This will block until current sort list is available
-            current_sort_list = model_list_dd.bget("current_sort_list")
-            # Once the sorted list is available clear the new model event
-            if not sequential_workflow:
-                new_model_event.clear()
-            top_candidates = current_sort_list['smiles']
-            simulated_compounds = list(sim_dd.keys())
-            model_list_dd.bput('simulated_compounds', simulated_compounds)
-            #simulated_compounds = model_list_dd.bget("simulated_compounds")
-        except:
-            top_candidates = []
-
-        logger.info(f"current_sort_list has {len(top_candidates)} candidates")
         
-        if top_candidates == prev_top_candidates or len(simulated_compounds) < len(top_candidates):
-            # Sleep if the top candidates have not changed or there are too few simulations
+        # This will block until current sort list is available
+        logger.info("Waiting for current_sort_list")
+        current_sort_list = model_list_dd.bget("current_sort_list")
+        top_candidates = current_sort_list['smiles']
+        logger.info("Retrieved current_sort_list")
+        logger.info(f"current_sort_list has {len(top_candidates)} candidates")
+        # Once the sorted list is available clear the new model event
+        logger.info(f"{sequential_workflow=}")
+        logger.info(f"Status of new_model_event is {new_model_event.is_set()=}")
+        if not sequential_workflow:
+            logger.info(f"Status of new_model_event is {new_model_event.is_set()=}")
+            if new_model_event.is_set():
+                new_model_event.clear()
+                driver_logger.info("Cleared new_model_event")
+                logger.info("Cleared new_model_event")
+        
+        simulated_compounds = list(sim_dd.keys())
+        model_list_dd.bput('simulated_compounds', simulated_compounds)
+        #simulated_compounds = model_list_dd.bget("simulated_compounds")
+        logger.info(f"Number of simulations available for training: {len(simulated_compounds)}")
+        if top_candidates == prev_top_candidates:
+            # Sleep if the top candidates have not changed
             logger.info("No new candidates to train on, waiting...")
+            time.sleep(list_poll_interval_sec)
+        elif len(simulated_compounds) < len(top_candidates)//2:
+            #  Sleep if there are too few new simulations
+            logger.info(f"Only {len(simulated_compounds)} simulations are available, waiting...")
             time.sleep(list_poll_interval_sec)
         else:
             ######## Build model #############
@@ -138,12 +148,10 @@ def fine_tune(model_list_dd: DDict,
                 # Notify other processes of new model and wait for them to reach barrier
                 if new_model_event is not None:
                     new_model_event.set()
-                    driver_logger.info(f"Training setting new_model_event and waiting for barrier to advance to checkpoint")
+                    logger.info(f"Training setting new_model_event")
+                    driver_logger.info(f"Training setting new_model_event")
                     #barrier.wait()
                     #driver_logger.info(f"Barrier passed, clearing new_model_event, progressing with model {model_iter}")
                     #new_model_event.clear()
         training_iter += 1
     logger.info("Training process exiting")
-            
-
-
