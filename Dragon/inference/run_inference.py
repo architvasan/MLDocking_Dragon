@@ -246,6 +246,7 @@ def run_inference_loop(model_list_dd,
 
         dd_read_tic = perf_counter()
         val = data_dd[this_key]
+        num_smiles = len(val['smiles'])
         dd_read_toc = perf_counter()
         dd_read_time = dd_read_toc - dd_read_tic
         #logger.debug(f"Read key {this_key} from Dragon Dict in {dd_read_time} seconds")
@@ -266,6 +267,9 @@ def run_inference_loop(model_list_dd,
                                     worker_logger)
                 worker_logger.info(f"New model loaded")
                 pause_updates = True
+                if stop_event.is_set():
+                    worker_logger.info("stop_event is set, exiting loop")
+                    break
         
         # Process key
         metrics = process_key(this_key, val, model, checkpoint_id, hyper_params, tokenizer, data_dd)
@@ -273,7 +277,7 @@ def run_inference_loop(model_list_dd,
         key_time = toc - tic
         inference_time = metrics['inference_time']
         dd_write_time = metrics['dd_write_time']
-        worker_logger.debug(f"Processed key {this_key}: {key_time=} {inference_time=} {dd_read_time=} {dd_write_time=} seconds")
+        worker_logger.debug(f"Processed key {this_key} containing {num_smiles} smiles: {key_time=} {inference_time=} {dd_read_time=} {dd_write_time=} seconds")
         # Move to next key and check for model update
         next_key_index += 1
         try:
@@ -290,6 +294,9 @@ def run_inference_loop(model_list_dd,
                                 proc,
                                 worker_logger)
             pause_updates = True
+            if stop_event.is_set():
+                worker_logger.info("stop_event is set, exiting loop")
+                break
         
 
 def update_model(model_list_dd, hyper_params, 
@@ -319,9 +326,6 @@ def update_model(model_list_dd, hyper_params,
                                         hyper_params=hyper_params)
     checkpoint_id = model_list_dd.checkpoint_id
     worker_logger.info(f"Detected new model event, now on model {checkpoint_id}")
-    #worker_logger.debug(f"Waiting for barrier sync")
-    #barrier.wait()
-    #logger.info(f"Barrier cleared, proceeding to inference")
     return model
 
 

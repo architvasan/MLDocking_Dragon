@@ -13,9 +13,9 @@ from dragon.data.ddict.ddict import DDict
 from logging_config import train_logger as logger
 from logging_config import stdout_to_logger, driver_logger
 
-def continue_training(event, training_iter, model_iter, max_iter):
+def continue_training(stop_event, training_iter, model_iter, max_iter):
     """Determine whether to continue training based on event and iteration count"""
-    sequential_workflow = event is None
+    sequential_workflow = stop_event is None
     if sequential_workflow:
         if training_iter == 0:
             return True
@@ -24,9 +24,9 @@ def continue_training(event, training_iter, model_iter, max_iter):
     else:
         if max_iter is not None:
             if model_iter >= max_iter:
-                event.set()
+                stop_event.set()
                 driver_logger.info(f"Reached maximum training iterations {max_iter}, stopping async workflow")
-        return not event.is_set()
+        return not stop_event.is_set()
 
 def fine_tune(model_list_dd: DDict, 
                 sim_dd: DDict,
@@ -49,8 +49,6 @@ def fine_tune(model_list_dd: DDict,
                             training_iter, 
                             model_iter,
                             max_iter):
-
-        
         # This will block until current sort list is available
         logger.info("Waiting for current_sort_list")
         current_sort_list = model_list_dd.bget("current_sort_list")
@@ -150,8 +148,7 @@ def fine_tune(model_list_dd: DDict,
                     new_model_event.set()
                     logger.info(f"Training setting new_model_event")
                     driver_logger.info(f"Training setting new_model_event")
-                    #barrier.wait()
-                    #driver_logger.info(f"Barrier passed, clearing new_model_event, progressing with model {model_iter}")
-                    #new_model_event.clear()
         training_iter += 1
+    if not sequential_workflow:
+        new_model_event.set()
     logger.info("Training process exiting")

@@ -36,6 +36,35 @@ def compare_candidate_results():
     # TODO: implement comparison logic to determine model improvement and convergence
     pass
 
+def continue_sorting(sequential_workflow,
+                    sorting_iter,
+                    new_model_event,
+                    model_list_dd,
+                    stop_event,
+                    checkpoint_interval_sec,):
+
+    checkpoint_id = model_list_dd.checkpoint_id
+    continue_flag = True
+    if sequential_workflow:
+        continue_flag = False
+    else:
+        if new_model_event.is_set():
+            model_list_dd.checkpoint()
+            checkpoint_id = model_list_dd.checkpoint_id
+            logger.info(f"Sort controller advanced to checkpoint {checkpoint_id}")
+            continue_flag = not stop_event.is_set()
+            logger.info(f"Continue flag is {continue_flag}")
+            # For asynchronous workflow, wait for checkpoint interval before sorting with new inference results
+            if continue_flag:
+                time.sleep(checkpoint_interval_sec)
+                logger.info("Finished sleep")
+        else:
+            if sorting_iter > 0:
+                previous_list = model_list_dd.bget("current_sort_list")
+                list_key = f"list_{sorting_iter-1}"
+                logger.info(f"Saving {list_key} in checkpoint {checkpoint_id}")
+                model_list_dd[list_key] = previous_list
+    return continue_flag
 
 def sort_controller(
     dd,
@@ -46,7 +75,6 @@ def sort_controller(
     model_list_dd,
     random_number_fraction,
     max_iter=10,
-    #continue_event=None,
     stop_event=None,
     new_model_event=None,
     barrier=None,
@@ -64,21 +92,17 @@ def sort_controller(
 
     continue_flag = True
     sorting_iter = 0
-    while continue_flag:
+    while continue_sorting(sequential_workflow,
+                            sorting_iter,
+                            new_model_event,
+                            model_list_dd,
+                            stop_event,
+                            checkpoint_interval_sec):
 
         checkpoint_id = model_list_dd.checkpoint_id
-
         logger.info(f"Sorting on checkpoint {checkpoint_id} and iteration {sorting_iter}")
 
-        #model_list_dd.sync_to_newest_checkpoint()
-        #logger.info(f"Model list dictionary synced to newest checkpoint id {model_list_dd.checkpoint_id}")
         tic = perf_counter()
-
-        if sorting_iter > 0 and not new_model_event.is_set():
-            previous_list = model_list_dd.bget("current_sort_list")
-            list_key = f"list_{sorting_iter-1}"
-            logger.info(f"Saving {list_key}")
-            model_list_dd[list_key] = previous_list
 
         random_number = int(random_number_fraction*top_candidate_number)
         logger.info(f"Adding {random_number} random candidates to training")
@@ -113,29 +137,13 @@ def sort_controller(
             sorter_proc.join()
 
         sorting_iter += 1
-        # Make checkpoint decision
-        if sequential_workflow:
-            continue_flag = False
-        else:
-            if new_model_event.is_set():
-                model_list_dd.checkpoint()
-                checkpoint_id = model_list_dd.checkpoint_id
-                #driver_logger.info(f"Sort controller waiting at barrier on {sorting_iter=} and {checkpoint_id=}...")
-                #barrier.wait()
-                logger.info(f"Sort controller advanced to checkpoint {checkpoint_id}")
-                
-                # Check whether to continue async workflow
-                # if checkpoint_id > max_iter: 
-                #     continue_event.clear()
-                #     driver_logger.info(f"Clearing continue_event after {max_iter} checkpoints for testing purposes")
-                continue_flag = not stop_event.is_set()
-                logger.info(f"Continue flag is {continue_flag}")
-                # For asynchronous workflow, wait for checkpoint interval before sorting with new inference results
-                if continue_flag:
-                    time.sleep(checkpoint_interval_sec)
-                    logger.info("Finished sleep")
         logger.info(f"Continuing on to next loop iter")
-        
+            
+    # Add a dummy current_sort_list to model_list_dd to unblock any procs waiting on it
+    if not sequential_workflow:
+        if new_model_event.is_set():  
+            model_list_dd.bput('current_sort_list', []) 
+    logger.info("Exiting sort_controller")
 
 def get_largest(dd, out_queue, num_return_sorted, checkpoint_id):
     # get num_return_sorted values from the manager
@@ -146,7 +154,6 @@ def get_largest(dd, out_queue, num_return_sorted, checkpoint_id):
         keys = dd.keys()
         #keys = [k for k in keys if "model" not in k and "iter" not in k]
         this_value = []
-        logger.info("Get largest running")
         for key in keys:
             if "model" not in key and "iter" not in key:
                 val = dd[key]

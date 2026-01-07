@@ -105,8 +105,11 @@ def launch_docking_sim(sim_dd,
         grp.close()
     else:
         stop_event.wait()
-        grp.terminate()
-        logger.info(f"Terminated Process Group for Docking Sims")
+        try:
+            grp.close()
+        except Exception as e:
+            logger.info(f"Sim process group closed with exception {e}")
+        logger.info(f"Closed Process Group for Docking Sims")
 
     # Update simulated compounds list for sequential workflow
     if sequential_workflow:

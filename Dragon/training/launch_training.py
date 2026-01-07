@@ -80,7 +80,7 @@ def launch_training(model_list_dd: DDict,
     else:
         logger.info(f"Waiting for stop event to terminate training process group")
         stop_event.wait()
-        grp.terminate()
+        grp.close()
     toc = perf_counter()
     logger.info(f"Training process group stopped in {toc-tic} seconds")
 
