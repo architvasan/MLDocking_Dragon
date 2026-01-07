@@ -92,7 +92,7 @@ def load_model(new_model_event, i):
     else:
         return False
 
-def continue_inference(finished_keys, event):
+def continue_inference(finished_keys, stop_event):
     """Check if inference should continue
     :param finished_keys: boolean indicating if all keys have been processed
     :type finished_keys: bool
@@ -101,11 +101,11 @@ def continue_inference(finished_keys, event):
     :return: True if inference should continue, False otherwise
     :rtype: bool
     """
-    serial_workflow = event is None
+    serial_workflow = stop_event is None
     if serial_workflow:
         return finished_keys
     else:
-        return not event.is_set()
+        return not stop_event.is_set()
 
 def get_local_keys(data_dd, proc: int, num_procs: int) -> List[str]:
     """Read the keys containing inference data from the Dragon Dictionary
@@ -229,8 +229,12 @@ def run_inference_loop(model_list_dd,
 
     # Loop over keys until all keys are processed or stop_event is set
     next_key_index = 0
+    pause_updates = False
     while continue_inference(next_key_index < num_keys,
                             stop_event):
+        if not sequential_workflow:
+            if not new_model_event.is_set() and pause_updates:
+                pause_updates = False
         #worker_logger.debug(f"Key index {next_key_index} of {num_keys}")
         # Get current model iteration
         checkpoint_id = model_list_dd.checkpoint_id
@@ -242,6 +246,7 @@ def run_inference_loop(model_list_dd,
 
         dd_read_tic = perf_counter()
         val = data_dd[this_key]
+        num_smiles = len(val['smiles'])
         dd_read_toc = perf_counter()
         dd_read_time = dd_read_toc - dd_read_tic
         #logger.debug(f"Read key {this_key} from Dragon Dict in {dd_read_time} seconds")
@@ -261,6 +266,10 @@ def run_inference_loop(model_list_dd,
                                     proc,
                                     worker_logger)
                 worker_logger.info(f"New model loaded")
+                pause_updates = True
+                if stop_event.is_set():
+                    worker_logger.info("stop_event is set, exiting loop")
+                    break
         
         # Process key
         metrics = process_key(this_key, val, model, checkpoint_id, hyper_params, tokenizer, data_dd)
@@ -268,14 +277,14 @@ def run_inference_loop(model_list_dd,
         key_time = toc - tic
         inference_time = metrics['inference_time']
         dd_write_time = metrics['dd_write_time']
-        worker_logger.debug(f"Processed key {this_key}: {key_time=} {inference_time=} {dd_read_time=} {dd_write_time=} seconds")
+        worker_logger.debug(f"Processed key {this_key} containing {num_smiles} smiles: {key_time=} {inference_time=} {dd_read_time=} {dd_write_time=} seconds")
         # Move to next key and check for model update
         next_key_index += 1
         try:
-            new_model = new_model_event.is_set()
+            new_model = new_model_event.is_set() and not pause_updates
         except:
             new_model = False
-        worker_logger.debug(f"Checking for new model event: {new_model=}")
+        # worker_logger.debug(f"Checking for new model event: {new_model=}")
         if new_model:
             worker_logger.info(f"Getting new model")
             model = update_model(model_list_dd, 
@@ -284,6 +293,11 @@ def run_inference_loop(model_list_dd,
                                 barrier, 
                                 proc,
                                 worker_logger)
+            pause_updates = True
+            if stop_event.is_set():
+                worker_logger.info("stop_event is set, exiting loop")
+                break
+        
 
 def update_model(model_list_dd, hyper_params, 
                            new_model_event, barrier, proc, worker_logger):
@@ -303,18 +317,15 @@ def update_model(model_list_dd, hyper_params,
     '''
     
     worker_logger.info(f"Waiting for new model event")
+    # This will block until weights are available
     new_model_event.wait()
     
-
     # Retrieve model from dictionary
     model,_ = retrieve_model_from_dict(model_list_dd, 
                                         checkpoint=True, 
                                         hyper_params=hyper_params)
     checkpoint_id = model_list_dd.checkpoint_id
     worker_logger.info(f"Detected new model event, now on model {checkpoint_id}")
-    worker_logger.debug(f"Waiting for barrier sync")
-    barrier.wait()
-    logger.info(f"Barrier cleared, proceeding to inference")
     return model
 
 

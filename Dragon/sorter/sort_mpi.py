@@ -123,7 +123,7 @@ def mpi_sort(_dict: DDict, num_keys: int, num_return_sorted: int, candidate_dict
     all_direct_sort_times = comm.gather(direct_sort_time, root=0)
     if rank == 0:
         ave_direct_sort_time = sum(all_direct_sort_times) / len(all_direct_sort_times)
-        logger.info(f"Average direct sort time is {ave_direct_sort_time:.3f} seconds", flush=True)
+        logger.info(f"Average direct sort time is {ave_direct_sort_time:.3f} seconds")
     #print(f"Rank {rank} finished direct sort in {toc-tic} seconds; found {len(my_results)} results; starting local merge",flush=True)
             
     # Combine local results
@@ -219,10 +219,10 @@ def mpi_sort(_dict: DDict, num_keys: int, num_return_sorted: int, candidate_dict
         logger.info(f"Collected {num_top_candidates=}")
         if num_top_candidates > 0:
             
-            current_sort_iter = candidate_dict.bget("current_sort_iter")
-            if current_sort_iter > -1:
-                current_sort_list = candidate_dict.bget("current_sort_list")
-                candidate_dict[str(current_sort_iter)] = current_sort_list
+            # current_sort_iter = candidate_dict.bget("current_sort_iter")
+            # if current_sort_iter > -1:
+            #     current_sort_list = candidate_dict.bget("current_sort_list")
+            #     candidate_dict[str(current_sort_iter)] = current_sort_list
             
             candidate_inf,candidate_smiles,candidate_model_iter = zip(*top_candidates)
             non_zero_infs = len([cinf for cinf in candidate_inf if cinf != 0])
@@ -230,18 +230,18 @@ def mpi_sort(_dict: DDict, num_keys: int, num_return_sorted: int, candidate_dict
             logger.info(f"Sorted list contains {non_zero_infs} non-zero inference results out of {len(candidate_inf)}")
             sort_val = {"inf": list(candidate_inf), "smiles": list(candidate_smiles), "model_iter": list(candidate_model_iter)}
         
-            save_list(candidate_dict, current_sort_iter+1, sort_val, logger)    
+            save_list(candidate_dict, sort_val, logger)    
     #print(f"Rank {rank} done",flush=True)
     MPI.Finalize()
     
     return
 
-def save_list(candidate_dict, ckey, sort_val, logger):
+def save_list(candidate_dict, sort_val, logger):
 
     logger.info("HERE IS THE CANDIDATE LIST (first 10 only)")
     logger.info("******************************************")
-    logger.info(sort_val[:10])
+    logger.info(f"{sort_val[:10]}")
     candidate_dict.bput("current_sort_list", sort_val)
-    candidate_dict.bput("current_sort_iter", ckey)
-    logger.info(f"candidate dictionary on iter {int(ckey)} and saved")
+    #candidate_dict.bput("current_sort_iter", ckey)
+    logger.info(f"candidate dictionary saved")
 

@@ -107,10 +107,11 @@ if __name__ == "__main__":
     # The model and candidate dictionary will be checkpointed
     
     # Get info on the number of files
-    base_path = pathlib.Path(args.data_path)
-    files, num_files = get_files(base_path)
-    if num_tot_nodes <= 3:
-        num_files = min(128, num_files)
+    # base_path = pathlib.Path(args.data_path)
+    # files, num_files = get_files(base_path)
+    # if num_tot_nodes <= 3:
+    #     num_files = min(128, num_files)
+    num_files = args.num_files
     logger.info(f"There are {num_files} files")
 
     data_dict_mem, sim_dict_mem, model_list_dict_mem = max_data_dict_size(num_files, node_counts, max_pool_frac=args.mem_fraction)
@@ -148,7 +149,7 @@ if __name__ == "__main__":
             args.data_path,
             max_procs,
             num_tot_nodes * args.managers_per_node,
-            num_files
+            num_files,
         ),
     )
     loader_proc.start()
@@ -252,7 +253,7 @@ if __name__ == "__main__":
                                 args=(
                                     data_dd,
                                     top_candidate_number,
-                                    args.max_procs_per_node,
+                                    len(sorting_threads),
                                     nodelists['sorting'],
                                     sorting_threads,
                                     model_list_dd,

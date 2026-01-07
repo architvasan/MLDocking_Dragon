@@ -107,8 +107,11 @@ def launch_inference(data_dd: DDict,
         grp.close()
     else:
         stop_event.wait()
-        logger.info(f"Stop event has been set, terminating inference process group")
-        grp.terminate()
+        try:
+            grp.close()
+        except Exception as e:
+            logger.info(f"Inf process group closed with exception {e}")
+        logger.info(f"Stop event has been set, closing inference process group")
         
     toc = perf_counter()
     logger.info(f"Performed inference in {toc-tic} seconds")
