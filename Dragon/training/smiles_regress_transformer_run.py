@@ -57,7 +57,6 @@ def fine_tune(model_list_dd: DDict,
         logger.info(f"current_sort_list has {len(top_candidates)} candidates")
         # Once the sorted list is available clear the new model event
         logger.info(f"{sequential_workflow=}")
-        logger.info(f"Status of new_model_event is {new_model_event.is_set()=}")
         if not sequential_workflow:
             logger.info(f"Status of new_model_event is {new_model_event.is_set()=}")
             if new_model_event.is_set():
@@ -144,7 +143,7 @@ def fine_tune(model_list_dd: DDict,
                 logger.info("Saved fine tuned model to dictionary")
 
                 # Notify other processes of new model and wait for them to reach barrier
-                if new_model_event is not None:
+                if not sequential_workflow:
                     new_model_event.set()
                     logger.info(f"Training setting new_model_event")
                     driver_logger.info(f"Training setting new_model_event")
