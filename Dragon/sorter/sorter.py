@@ -46,7 +46,8 @@ def continue_sorting(sequential_workflow,
     checkpoint_id = model_list_dd.checkpoint_id
     continue_flag = True
     if sequential_workflow:
-        continue_flag = False
+        if sorting_iter >= 1:
+            continue_flag = False
     else:
         if new_model_event.is_set():
             model_list_dd.checkpoint()

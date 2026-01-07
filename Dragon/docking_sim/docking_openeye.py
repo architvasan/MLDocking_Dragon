@@ -377,6 +377,7 @@ def run_docking(sim_dd,
 
         # Get current top candidates
         # This will block until current_sort_list is avilable in the checkpoint
+        worker_logger.info(f"model_list_dd.keys()")
         top_candidates = model_list_dd.bget("current_sort_list")
         if top_candidates == prev_top_candidates:
             worker_logger.info(f"{sim_iter=} No new top candidates found, sleeping for {list_poll_interval_sec} seconds...")
