@@ -7,7 +7,10 @@ import sys
 import os
 from time import perf_counter
 import time
-import intel_extension_for_tensorflow as itex
+try:
+    import intel_extension_for_tensorflow as itex
+except ImportError:
+    pass
 import dragon
 from dragon.data.ddict.ddict import DDict
 from logging_config import train_logger as logger

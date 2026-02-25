@@ -114,9 +114,9 @@ class CyclicLR(Callback):
         logs = logs or {}
 
         if self.clr_iterations == 0:
-            K.set_value(self.model.optimizer.learning_rate, self.base_lr)
+            self.model.optimizer.learning_rate = self.base_lr
         else:
-            K.set_value(self.model.optimizer.learning_rate, self.clr())        
+            self.model.optimizer.learning_rate = self.clr()
             
     def on_batch_end(self, epoch, logs=None):
         
@@ -124,10 +124,23 @@ class CyclicLR(Callback):
         self.trn_iterations += 1
         self.clr_iterations += 1
 
-        self.history.setdefault('lr', []).append(K.get_value(self.model.optimizer.lr))
+        #self.history.setdefault('lr', []).append(K.get_value(self.model.optimizer.lr))
+        if hasattr(self.model.optimizer, 'lr'):
+            lr_value = K.get_value(self.model.optimizer.lr)
+        else:
+            lr_value = self.model.optimizer.learning_rate
+            if hasattr(lr_value, 'numpy'):
+                lr_value = float(lr_value.numpy())
+        self.history.setdefault('lr', []).append(lr_value)
         self.history.setdefault('iterations', []).append(self.trn_iterations)
 
         for k, v in logs.items():
             self.history.setdefault(k, []).append(v)
         
-        K.set_value(self.model.optimizer.lr, self.clr())
+        
+        #K.set_value(self.model.optimizer.lr, self.clr())
+        new_lr = self.clr()
+        if hasattr(self.model.optimizer, 'lr'):
+            K.set_value(self.model.optimizer.lr, new_lr)
+        else:
+            self.model.optimizer.learning_rate = new_lr

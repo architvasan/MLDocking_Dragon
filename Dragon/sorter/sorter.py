@@ -22,7 +22,10 @@ import heapq
 import socket
 import traceback
 
-import intel_extension_for_tensorflow as itex
+try:
+    import intel_extension_for_tensorflow as itex
+except ImportError:
+    pass
 from data_loader.data_loader_presorted import load_inference_data, initialize_worker
 from logging_config import sort_logger as logger
 from logging_config import driver_logger

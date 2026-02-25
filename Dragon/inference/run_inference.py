@@ -12,7 +12,10 @@ from tqdm import tqdm
 from dragon.utils import host_id
 import logging
 
-import intel_extension_for_tensorflow as itex
+try:
+    import intel_extension_for_tensorflow as itex
+except ImportError:
+    pass
 from inference.utils_transformer import pad
 from inference.utils_encoder import SMILES_SPE_Tokenizer
 from data_loader.model_loader import retrieve_model_from_dict, load_pretrained_model
@@ -148,8 +151,8 @@ def get_local_keys(data_dd, proc: int, num_procs: int) -> List[str]:
 
 def get_tokenizer():
     # Set up tokenizer
-    vocab_file = driver_path + "inference/VocabFiles/vocab_spe.txt"
-    spe_file = driver_path + "inference/VocabFiles/SPE_ChEMBL.txt"
+    vocab_file = driver_path + "/inference/VocabFiles/vocab_spe.txt"
+    spe_file = driver_path + "/inference/VocabFiles/SPE_ChEMBL.txt"
     tokenizer = SMILES_SPE_Tokenizer(vocab_file=vocab_file, spe_file=spe_file)
     return tokenizer
 

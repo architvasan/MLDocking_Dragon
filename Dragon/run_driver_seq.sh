@@ -37,7 +37,7 @@ case "$FULL_HOSTNAME" in
 	echo "Setting up for Polaris run"
 	source /eagle/hpe_dragon_collab/csimpson/env.sh
 	DATA_PATH=/eagle/hpe_dragon_collab/csimpson/ZINC-22-presorted/tiny
-	export DRIVER_PATH=/eagle/hpe_dragon_collab/csimpson/MLDocking_Dragon/Dragon/
+	export DRIVER_PATH=$PWD/
 	export RECEPTOR_FILE=/eagle/hpe_dragon_collab/avasan/3clpro_7bqy.oedu
 	;;
     *"sirius"* )
@@ -72,7 +72,7 @@ if [[ -n $POLARIS || -n $SIRIUS ]]; then
     export GPU_DEVICES="3,2,1,0"
     export CPU_AFFINITY="list:0-7,32-39:8-15,40-47:16-23,48-55:24-31,56-63"
     export USE_MPI_SORT=1
-    CORES_PER_NODE=32
+    export CORES_PER_NODE=32
     MEM_PER_NODE=128
 fi
 

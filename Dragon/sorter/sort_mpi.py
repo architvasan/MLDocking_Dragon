@@ -240,7 +240,8 @@ def save_list(candidate_dict, sort_val, logger):
 
     logger.info("HERE IS THE CANDIDATE LIST (first 10 only)")
     logger.info("******************************************")
-    logger.info(f"{sort_val[:10]}")
+    sliced = sort_val["smiles"][:10]
+    logger.info(f"{sliced}")
     candidate_dict.bput("current_sort_list", sort_val)
     #candidate_dict.bput("current_sort_iter", ckey)
     logger.info(f"candidate dictionary saved")
