@@ -8,7 +8,6 @@ from time import perf_counter, sleep
 import random
 import gc
 import socket
-from tqdm import tqdm
 from dragon.utils import host_id
 import logging
 
