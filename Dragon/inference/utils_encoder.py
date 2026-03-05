@@ -9,6 +9,7 @@ import re
 import codecs
 import unicodedata
 from typing import List, Optional
+logging.getLogger("transformers").setLevel(logging.ERROR)
 from transformers import PreTrainedTokenizer
 from SmilesPE.tokenizer import SPE_Tokenizer
 
