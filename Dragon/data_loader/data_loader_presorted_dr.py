@@ -15,39 +15,56 @@ import multiprocessing as mp
 from dragon.data.ddict import DDict
 from dragon.native.machine import current, System
 import traceback
+import glob
 
 from functools import partial
 
+# class DataReader:
+
+#     def __init__(self, dir, 
+#                 num_files: int = None,
+#                 num_managers: int = 1):
+        
+#         base_path = pathlib.Path(dir)
+#         self.num_managers = num_managers
+#         self.num_files = num_files
+#         self.files = glob.iglob(f"{base_path}/*.gz")
+#         #self.total_files = len(list(glob.iglob(f"{base_path}/*.gz")))
+#         self.idx = 0
+
+#     def __iter__(self):
+#         return self
+
+#     def __next__(self):       
+#         for f in self.files:
+#             yield (self.idx, f, self.idx % self.num_managers)
+#             self.idx += 1
+            
 class DataReader:
 
-    def __init__(self, dir, 
+    def __init__(self, dir,
                 num_files: int = None,
                 num_managers: int = 1):
-        
-        files, file_count = get_files(pathlib.Path(dir))
-        if num_files is None:
-            num_files = file_count
-        else:
-            files = files[0:num_files]
-
-        file_tuples = [(i, f, i % num_managers) for i, f in enumerate(files)]
 
         self.dir = dir
-        self.file_tuples = [ft for ft in file_tuples]
-        self.idx = 0
         self.num_files = num_files
-        self.total_files = file_count
+        self.num_managers = num_managers
 
     def __iter__(self):
-        return self
+        files = glob.iglob("*.gz", root_dir=self.dir)
+        index = 0
 
-    def __next__(self):
-        try:
-            data_to_process = self.file_tuples[self.idx]
-            self.idx += 1
-            return data_to_process
-        except IndexError:
-            raise StopIteration
+        for file in files:
+            if index >= self.num_files:
+                break
+            yield (index, os.path.join(self.dir,file), index % self.num_managers)
+            index += 1
+
+    def __getstate__(self):
+        return (self.dir, self.num_files, self.num_managers)
+
+    def __setstate__(self, the_state):
+        self.dir, self.num_files, self.num_managers = the_state
 
 def get_files(base_p: pathlib.PosixPath) -> Tuple[list, int]:
     """Return the file paths
@@ -83,9 +100,15 @@ def read_smiles(file_tuple: Tuple[int, str, int]):
     :type file_path: pathlib.PosixPath
     """
     tic = perf_counter()
-    outfiles_path = f"smiles_sizes/{file_tuple[2]}"
     sort_test = os.getenv("TEST_SORTING")
-    debug = True
+
+    file_index = file_tuple[0]
+    manager_index = file_tuple[2]
+    file_path = file_tuple[1]
+
+    outfiles_path = f"smiles_sizes"
+
+    debug = False
 
     if debug:
         os.makedirs(outfiles_path, exist_ok=True)
@@ -94,9 +117,6 @@ def read_smiles(file_tuple: Tuple[int, str, int]):
         
         file_tic = perf_counter()
         # Read smiles from file
-        file_index = file_tuple[0]
-        manager_index = file_tuple[2]
-        file_path = file_tuple[1]
 
         smiles = []
         f_name = str(file_path).split("/")[-1]
@@ -152,6 +172,19 @@ def read_smiles(file_tuple: Tuple[int, str, int]):
             with open(f"{outfiles_path}/{logname}.out",'a') as f:
                 f.write(f"Stored {smiles_size} bytes in dragon dictionary in {ddict_toc - ddict_tic}s\n")
                 f.write(f"Total time to read and store smiles from {f_name} is {toc - tic}s\n")
+        
+        check = file_index % 10000
+        if (check == 0):
+            # print the DDict Utilization
+            stats = data_dict.dstats
+            ddict_utilization = [(manager_id, stats[manager_id].pool_utilization) for manager_id in stats]
+            print("DDict Pools:", ddict_utilization, flush=True)
+        if (check< 32): # Get one client from every node for instance
+            # print the Default Pool Utilization
+            from dragon.managed_memory import MemoryPool
+            def_pool = MemoryPool.attach_default()
+            print("Default Pool Utilization", def_pool.utilization, flush=True)
+        
         return smiles_size
     except Exception as e:
         try:
@@ -198,8 +231,8 @@ def load_inference_data(_dict: DDict,
     base_path = pathlib.Path(data_path)
     #files, num_files_in_dir = get_files(base_path)
     dr = DataReader(base_path, num_files, num_managers)
-    print(f"num_files_in_dir={dr.total_files}", flush=True)
-    
+    #print(f"num_files_in_dir={dr.total_files}", flush=True)
+
     print(f"Number of files to read is {num_files}", flush=True)
 
     num_pool_procs = min(max_procs, num_files//4)
