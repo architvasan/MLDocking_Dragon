@@ -178,6 +178,11 @@ if __name__ == "__main__":
     num_keys = len(data_dd.keys())
     logger.info(f"# {num_keys=}")
     logger.info(f"# {num_files=}")
+
+    with open("driver_times.log", "w") as f:
+        f.write(f"# load_time={load_time}\n")
+        f.write(f"# num_keys={num_keys}\n")
+        f.write(f"# num_files={num_files}\n")
     
     logger.info("Here are the data DDict stats after data loading...")
     for stat in data_dd.stats:
