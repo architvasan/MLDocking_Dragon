@@ -139,7 +139,7 @@ if __name__ == "__main__":
     logger.info(f"Launched Dragon Dictionary for model list with total memory size {model_list_dict_mem} on {num_tot_nodes} nodes")
     
     # Launch the data loader component
-    max_procs = args.max_procs_per_node*num_tot_nodes
+    max_procs = min(args.max_procs_per_node, 8*args.managers_per_node) * num_tot_nodes
     logger.info("Loading inference data into Dragon Dictionary ...")
     tic = perf_counter()
     loader_proc = mp.Process(
