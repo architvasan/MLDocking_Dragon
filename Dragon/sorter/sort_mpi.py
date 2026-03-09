@@ -224,24 +224,30 @@ def mpi_sort(_dict: DDict, num_keys: int, num_return_sorted: int, candidate_dict
             #     current_sort_list = candidate_dict.bget("current_sort_list")
             #     candidate_dict[str(current_sort_iter)] = current_sort_list
             
+            top_candidates.reverse()
             candidate_inf,candidate_smiles,candidate_model_iter = zip(*top_candidates)
             non_zero_infs = len([cinf for cinf in candidate_inf if cinf != 0])
-            
+            logger.info("HERE IS THE CANDIDATE LIST (first 10 only)")
+            logger.info("******************************************")
+            logger.info(f"{top_candidates[:10]}")
+
             logger.info(f"Sorted list contains {non_zero_infs} non-zero inference results out of {len(candidate_inf)}")
             sort_val = {"inf": list(candidate_inf), "smiles": list(candidate_smiles), "model_iter": list(candidate_model_iter)}
-        
-            save_list(candidate_dict, sort_val, logger)    
+
+            candidate_dict.bput("current_sort_list", sort_val)
+            logger.info(f"candidate dictionary saved")        
+            #save_list(candidate_dict, sort_val, logger)    
     #print(f"Rank {rank} done",flush=True)
     MPI.Finalize()
     
     return
 
-def save_list(candidate_dict, sort_val, logger):
+# def save_list(candidate_dict, sort_val, logger):
 
-    logger.info("HERE IS THE CANDIDATE LIST (first 10 only)")
-    logger.info("******************************************")
-    logger.info(f"{sort_val[:10]}")
-    candidate_dict.bput("current_sort_list", sort_val)
-    #candidate_dict.bput("current_sort_iter", ckey)
-    logger.info(f"candidate dictionary saved")
+#     # logger.info("HERE IS THE CANDIDATE LIST (first 10 only)")
+#     # logger.info("******************************************")
+#     # logger.info(f"{sort_val[:10]}")
+#     candidate_dict.bput("current_sort_list", sort_val)
+#     #candidate_dict.bput("current_sort_iter", ckey)
+#     logger.info(f"candidate dictionary saved")
 

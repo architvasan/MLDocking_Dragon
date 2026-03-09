@@ -47,7 +47,7 @@ def retrieve_model_from_dict(dd: Union[DDict, dict], checkpoint=False, hyper_par
 
     model_iter = dd.checkpoint_id
     logger.debug(f"Loading model weights from dictionary with checkpoint_id: {model_iter}")
-    logger.info(f"{list(dd.keys())=}")
+    #logger.info(f"{list(dd.keys())=}")
 
     tic = perf_counter()
     # This will block until model weight are available

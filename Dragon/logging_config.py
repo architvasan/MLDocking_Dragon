@@ -70,10 +70,19 @@ def setup_logger(name, log_file, level=logging.DEBUG):
 
 
 driver_logger = setup_logger('driver', None, level=log_level)
-load_logger = setup_logger('loader', "data_loader.log", level=log_level)
-inf_logger = setup_logger('inf', "inference.log", level=log_level)
-sim_logger = setup_logger('sim', "simulation.log", level=log_level)
-train_logger = setup_logger('train', "training.log", level=log_level)
-sort_logger = setup_logger('sort', "sorting.log", level=log_level)
+
+if os.getenv("UNIFIED_LOGGING") == "1":
+    # If unified logging is enabled, redirect all logs to the driver logger
+    load_logger = driver_logger
+    inf_logger = driver_logger
+    sim_logger = driver_logger
+    train_logger = driver_logger
+    sort_logger = driver_logger
+else:
+    load_logger = setup_logger('loader', "data_loader.log", level=log_level)
+    inf_logger = setup_logger('inf', "inference.log", level=log_level)
+    sim_logger = setup_logger('sim', "simulation.log", level=log_level)
+    train_logger = setup_logger('train', "training.log", level=log_level)
+    sort_logger = setup_logger('sort', "sorting.log", level=log_level)
 
 

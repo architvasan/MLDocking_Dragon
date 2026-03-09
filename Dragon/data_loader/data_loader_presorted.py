@@ -167,8 +167,8 @@ def load_inference_data(_dict: DDict,
                         num_managers: int,
                         num_files: int = None,
                         nodelist: list = None,
-                        load_split_factor: int = 1,
-                        chunksize: int = 1):
+                        load_split_factor: int = 4,
+                        chunksize: int = 64):
     """Load pre-sorted inference data from files and to Dragon dictionary
 
     :param _dict: Dragon distributed dictionary
@@ -187,19 +187,6 @@ def load_inference_data(_dict: DDict,
     else:
         files = files[0:num_files]
     logger.info(f"Number of files to read is {num_files}")
-
-    # alloc = System()
-    # num_nodes = int(alloc.nnodes)
-    # if num_nodes <= 2:
-    #     gpu_devices = os.getenv("GPU_DEVICES")
-    #     if gpu_devices is not None:
-    #         gpu_devices = gpu_devices.split(",")
-    #         num_gpus = len(gpu_devices)
-    #     else:
-    #         num_gpus = 0
-    #     num_files = num_nodes*num_gpus*8 # 8 files per gpu
-    #     files = files[0:num_files]
-    #     print(f"Only loading {num_files} files for {num_nodes} node test")
 
     file_tuples = [(i, f, i % num_managers) for i, f in enumerate(files)]
 
@@ -232,6 +219,7 @@ def load_inference_data(_dict: DDict,
     else:
         outputs = []
         for i in range(load_split_factor):
+            batch_start = perf_counter()
             iter_data_size = 0
             num_pool_procs = num_procs
             pool = mp.Pool(num_pool_procs,
@@ -251,6 +239,7 @@ def load_inference_data(_dict: DDict,
                 chunksize=chunksize
             )
             outputs.extend(output)
+            logger.info(f"Batch {i} of {load_split_factor} submitted in {perf_counter() - batch_start:.3f} seconds")
             #for out in outputs:
             #    iter_data_size += out[0]
             #    io_times.append(out[1])
