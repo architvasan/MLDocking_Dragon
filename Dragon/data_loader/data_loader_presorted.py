@@ -167,7 +167,7 @@ def load_inference_data(_dict: DDict,
                         num_managers: int,
                         num_files: int = None,
                         nodelist: list = None,
-                        load_split_factor: int = 4,
+                        load_split_factor: int = 1,
                         chunksize: int = 64):
     """Load pre-sorted inference data from files and to Dragon dictionary
 
@@ -222,9 +222,11 @@ def load_inference_data(_dict: DDict,
             batch_start = perf_counter()
             iter_data_size = 0
             num_pool_procs = num_procs
+            ticc = perf_counter()
             pool = mp.Pool(num_pool_procs,
                         initializer=initialize_worker,
                         initargs=(_dict,))
+            t_init = perf_counter() - ticc
             #print(f"Pool initialized", flush=True)
             #print(f"Reading smiles for {num_files}", flush=True)
 
