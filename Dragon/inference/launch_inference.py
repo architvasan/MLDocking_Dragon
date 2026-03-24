@@ -75,10 +75,13 @@ def launch_inference(data_dd: DDict,
         node_name = Node(nodelist[node_num]).hostname
         for proc in range(num_procs_pn):
             proc_id = node_num * num_procs_pn + proc
+            num_procs_on_this_node = num_procs_pn*1
 
             if not sequential_workflow and proc_id == 0:
                 logger.info(f"Skipping inference launch on node {node_name} proc {inf_gpu_bind[proc]} to reserve GPU for training")    
                 continue
+            if not sequential_workflow and proc_id < 12:
+                num_procs_on_this_node -= 1
 
             local_policy = Policy(placement=Policy.Placement.HOST_NAME,
                                   host_name=node_name, 
@@ -89,7 +92,7 @@ def launch_inference(data_dd: DDict,
                                                     args=(model_list_dd,
                                                             data_dd,
                                                             proc_id,
-                                                            num_procs_pn*num_inf_nodes,
+                                                            num_procs_on_this_node, #*num_inf_nodes,
                                                             #continue_event,
                                                             stop_event,
                                                             new_model_event,

@@ -2,7 +2,6 @@ import os
 import sys
 from typing import List
 import numpy as np
-import psutil
 import os
 from time import perf_counter, sleep
 import random
@@ -106,7 +105,7 @@ def continue_inference(finished_keys, stop_event):
     else:
         return not stop_event.is_set()
 
-def get_local_keys(data_dd, proc: int, num_procs: int) -> List[str]:
+def get_local_keys(data_dd, proc: int, num_procs: int, worker_logger: logging.Logger) -> List[str]:
     """Read the keys containing inference data from the Dragon Dictionary
     and split equally among the procs
     :param data_dd: Dragon Dictionary containing the inference data
@@ -115,12 +114,15 @@ def get_local_keys(data_dd, proc: int, num_procs: int) -> List[str]:
     :type proc: int
     :param num_procs: total number of procs
     :type num_procs: int
+    :param worker_logger: logger for the worker process
+    :type worker_logger: logging.Logger
     :return: list of strings containing the split keys
     :rtype: List[str]
     """
     # Get local keys
     current_host = host_id()
     manager_nodes = data_dd.manager_nodes
+    local_managers = data_dd.local_managers
     keys = []
     #worker_logger.debug(f"{current_host=}")
     if proc == 0:
@@ -133,16 +135,19 @@ def get_local_keys(data_dd, proc: int, num_procs: int) -> List[str]:
             keys.extend(dm.keys())
     #worker_logger.debug(f"{proc}: found {len(keys)} local keys")
 
+    #keys = data_dd.local_keys()
+    worker_logger.debug(f"Found {len(keys)} local keys in Dragon Dict")
     # Split keys in Dragon Dict    
     keys = [k for k in keys if "iter" not in k and "model" not in k]
     keys.sort()
     #print(f"{proc}: splitting keys over {num_procs} local procs")
     if num_procs > 1:
+        worker_logger.debug(f"Splitting {len(keys)} keys among {num_procs} procs for local proc {proc%num_procs}")
         split_keys = split_dict_keys(keys, num_procs, proc%num_procs)
     else:
         split_keys = keys
     #print(f"{proc}: {split_keys}",flush=True)
-    #worker_logger.debug(f"Running inference on {len(split_keys)} keys")
+    worker_logger.debug(f"Running inference on {len(split_keys)} keys")
     return split_keys
 
 def get_tokenizer():
@@ -212,7 +217,7 @@ def run_inference_loop(model_list_dd,
 
     os.makedirs("inference_worker_logs", exist_ok=True)
     worker_logger = setup_logger(f'inf_worker_{proc}', f"inference_worker_logs/inference_worker_{proc}.log", level=logging.DEBUG)
-    worker_logger.info(f"Starting inference worker {proc} of {num_procs} procs")
+    worker_logger.info(f"Starting inference worker {proc} of {num_procs} procs on host {socket.gethostname()}")
 
     # Set up model and tokenizer
     tokenizer = get_tokenizer()
@@ -222,7 +227,7 @@ def run_inference_loop(model_list_dd,
 
     worker_logger.info(f"Retrieved model checkpoint {checkpoint_id} and tokenizer")
     # Get keys to process
-    my_keys = get_local_keys(data_dd, proc, num_procs)
+    my_keys = get_local_keys(data_dd, proc, num_procs, worker_logger)
     num_keys = len(my_keys)
     worker_logger.info(f"Processing {num_keys} keys")
 

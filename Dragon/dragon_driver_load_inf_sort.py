@@ -131,7 +131,7 @@ if __name__ == "__main__":
 
     #TODO: Add node policies for dictionaries
     # Initialize Dragon Dictionaries for inference, docking simulation, and model list
-    data_dd = DDict(args.managers_per_node, num_tot_nodes, data_dict_mem)
+    data_dd = DDict(args.managers_per_node, num_tot_nodes, data_dict_mem, streams_per_manager=0)
     logger.info(f"Launched Dragon Dictionary for inference with total memory size {data_dict_mem} on {num_tot_nodes} nodes")
     sim_dd = DDict(args.managers_per_node, num_tot_nodes, sim_dict_mem)
     logger.info(f"Launched Dragon Dictionary for docking simulation with total memory size {sim_dict_mem} on {num_tot_nodes} nodes")
@@ -139,7 +139,9 @@ if __name__ == "__main__":
     logger.info(f"Launched Dragon Dictionary for model list with total memory size {model_list_dict_mem} on {num_tot_nodes} nodes")
     
     # Launch the data loader component
-    max_procs = min(args.max_procs_per_node, 8*args.managers_per_node) * num_tot_nodes
+    data_loader_clients_per_manager = 6
+    max_procs = min(args.max_procs_per_node, 
+                    data_loader_clients_per_manager * args.managers_per_node) * num_tot_nodes
     logger.info("Loading inference data into Dragon Dictionary ...")
     tic = perf_counter()
     loader_proc = mp.Process(
@@ -195,13 +197,6 @@ if __name__ == "__main__":
     if args.load == "True":
         sys.exit()
 
-    # # Load pretrained model
-    # load_pretrained_model(model_list_dd)
-    # print("\nLoaded pretrained model",flush=True)
-
-    # # Initialize simulated compounds list
-    # if args.load == "False" and args.inference_and_sort == "False" and args.sort == "False":
-    #     sim_dd.bput('simulated_compounds', [])
     
     # Number of top candidates to produce
     if num_tot_nodes <= 3:
@@ -216,9 +211,6 @@ if __name__ == "__main__":
     loop_iter = 0
     with open("driver_times.log", "a") as f:
         f.write(f"# iter  infer_time  sort_time_filter sort_time_mpi \n")
-    #while loop_iter < max_iter:
-    #logger.info(f"*** Start loop iter {loop_iter} ***")
-    iter_start = perf_counter()
     logger.info(f"Current checkpoint: {model_list_dd.checkpoint_id}")
 
     # Launch the data inference component

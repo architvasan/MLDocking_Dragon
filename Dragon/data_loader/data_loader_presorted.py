@@ -147,7 +147,7 @@ def load_inference_data(_dict: DDict,
                         num_managers: int, 
                         num_files: int = None,
                         nodelist: list = None,
-                        load_split_factor: int = 4,
+                        load_split_factor: int = 1,
                         chunksize: int = 64):
     """Load pre-sorted inference data from files and to Dragon dictionary
 
